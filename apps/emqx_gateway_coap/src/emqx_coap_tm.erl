@@ -82,7 +82,14 @@ new() ->
     }.
 
 handle_request(#coap_message{id = MsgId} = Msg, TM) ->
-    Id = {in, MsgId},
+    Id =
+        case maps:get(block1, Msg#coap_message.options, undefined) of
+            undefined ->
+                {in, MsgId};
+            {BlockNum, _, _} ->
+                %% Use the msgid of first block to find the transport machine
+                {in, MsgId - BlockNum}
+        end,
     case find_machine(Id, TM) of
         undefined ->
             {Machine, TM2} = new_in_machine(Id, TM),
@@ -159,6 +166,7 @@ timeout({SeqId, Type, Msg}, TM) ->
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
+
 process_event(stop_timeout, _, TM, Machine) ->
     process_manager(stop, #{}, Machine, TM);
 process_event(
@@ -256,12 +264,12 @@ process_manager(_, Result, #state_machine{seq_id = SeqId} = Machine2, TM) ->
     Result#{tm => TM#{SeqId => Machine2}}.
 
 cancel_state_timer(#state_machine{timers = Timers} = Machine) ->
-    case maps:get(state_timer, Timers, undefined) of
+    case maps:get(state_timeout, Timers, undefined) of
         undefined ->
             Machine;
         Ref ->
-            _ = emqx_utils:cancel_timer(Ref),
-            Machine#state_machine{timers = maps:remove(state_timer, Timers)}
+            ok = emqx_utils:cancel_timer(Ref),
+            Machine#state_machine{timers = maps:remove(state_timeout, Timers)}
     end.
 
 process_timer(SeqId, {Type, Interval, Msg}, Timers) ->

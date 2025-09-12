@@ -18,7 +18,7 @@
     proto_out/1,
     proto_out/2,
     iter/3, iter/4,
-    reply/2, reply/3, reply/4
+    reply/2, reply/3, reply/4, reply/5
 ]).
 
 %%-type result() :: map() | empty.
@@ -54,12 +54,17 @@ reply(Reply, Result) ->
     Result#{reply => Reply}.
 
 reply(Method, Req, Result) when is_record(Req, coap_message) ->
-    reply(Method, <<>>, Req, Result);
+    reply(Method, <<>>, Req, Result, #{});
 reply(Method, Payload, Req) ->
-    reply(Method, Payload, Req, #{}).
+    reply(Method, Payload, Req, #{}, #{}).
 
 reply(Method, Payload, Req, Result) ->
-    Result#{reply => emqx_coap_message:piggyback(Method, Payload, Req)}.
+    reply(Method, Payload, Req, Result, #{}).
+
+reply(Method, Payload, Req, Result, Options) ->
+    ReplyMsg1 = emqx_coap_message:piggyback(Method, Payload, Req),
+    ReplyMsg2 = emqx_coap_message:set_options(Options, ReplyMsg1),
+    Result#{reply => ReplyMsg2}.
 
 %% run a tree
 iter([Key, Fun | T], Input, State) ->

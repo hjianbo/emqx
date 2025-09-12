@@ -10,8 +10,8 @@
 -define(ACK_TIMEOUT, 2000).
 -define(ACK_RANDOM_FACTOR, 1000).
 -define(MAX_RETRANSMIT, 4).
--define(EXCHANGE_LIFETIME, 247000).
--define(NON_LIFETIME, 145000).
+-define(EXCHANGE_LIFETIME, 5000).
+-define(NON_LIFETIME, 15000).
 
 -type request_context() :: any().
 
@@ -20,7 +20,8 @@
     req_context :: request_context(),
     retry_interval :: non_neg_integer(),
     retry_count :: non_neg_integer(),
-    observe :: non_neg_integer() | undefined
+    observe :: non_neg_integer() | undefined,
+    block1_buffer :: []
 }).
 
 -type transport() :: #transport{}.
@@ -37,6 +38,10 @@
     maybe_resend_4response/3
 ]).
 
+-export([
+    receive_block1/3
+]).
+
 -export_type([transport/0]).
 
 -import(emqx_coap_medium, [
@@ -45,7 +50,9 @@
     proto_out/2,
     out/1, out/2,
     proto_out/1,
-    reply/2
+    reply/2,
+    reply/3,
+    reply/5
 ]).
 
 -elvis([{elvis_style, atom_naming_convention, disable}]).
@@ -87,19 +94,29 @@ idle(
 idle(
     in,
     #coap_message{type = con, method = Method} = Msg,
-    _
+    Transport
 ) ->
     case Method of
         undefined ->
             reset(Msg, #{next => stop});
         _ ->
-            proto_out(
-                {request, Msg},
-                #{
-                    next => maybe_resend_4request,
-                    timeouts => [{stop_timeout, ?EXCHANGE_LIFETIME}]
-                }
-            )
+            case maps:get(block1, Msg#coap_message.options, undefined) of
+                undefined ->
+                    proto_out(
+                        {request, Msg},
+                        #{
+                            next => maybe_resend_4request,
+                            timeouts => [{stop_timeout, ?EXCHANGE_LIFETIME}]
+                        }
+                    );
+                {Num = 0, _More = true, BlockSize} ->
+                    Transport1 = Transport#transport{block1_buffer = [Msg#coap_message.payload]},
+                    %% TODO: may need negotiate the block_size:
+                    %% min(ClientRequested, Configured)
+                    reply_block1_continue(Num, BlockSize, Msg, Transport1);
+                _ ->
+                    reply({error, bad_request}, <<"block1 bardarg">>, Msg)
+            end
     end;
 idle(out, #coap_message{type = non} = Msg, _) ->
     out(Msg, #{
@@ -256,3 +273,45 @@ on_response(
         true ->
             emqx_coap_message:reset(Message)
     end.
+
+receive_block1(in, Msg, Transport) ->
+    case maps:get(block1, Msg#coap_message.options, undefined) of
+        undefined ->
+            reply({error, bad_request}, <<"block1 not found">>, Msg);
+        {Num, _More = true, BlockSize} ->
+            %% FIXME: Need to fix the re-transmit
+            NBuffer = [Msg#coap_message.payload | Transport#transport.block1_buffer],
+            Transport1 = Transport#transport{block1_buffer = NBuffer},
+            reply_block1_continue(Num, BlockSize, Msg, Transport1);
+        {_Num, _More = false, _BlockSize} ->
+            NBuffer = [Msg#coap_message.payload | Transport#transport.block1_buffer],
+            NMsg = Msg#coap_message{payload = iolist_to_binary(lists:reverse(NBuffer))},
+            proto_out(
+                {request, NMsg},
+                #{
+                    next => maybe_resend_4request,
+                    transport => Transport#transport{block1_buffer = done},
+                    timeouts =>
+                        [{stop_timeout, ?NON_LIFETIME}]
+                }
+            )
+    end.
+
+%%--------------------------------------------------------------------
+%% Internal functions
+%%--------------------------------------------------------------------
+
+reply_block1_continue(Num, BlockSize, Msg, Transport) ->
+    reply(
+        {ok, continue},
+        <<>>,
+        Msg,
+        #{
+            next => receive_block1,
+            transport => Transport,
+            timeouts => [{state_timeout, ?EXCHANGE_LIFETIME, block1_timeout}]
+        },
+        #{
+            block1 => {Num, true, BlockSize}
+        }
+    ).

@@ -28,6 +28,7 @@
     set_payload/2,
     get_option/2,
     get_option/3,
+    set_options/2,
     set_payload_block/3, set_payload_block/4
 ]).
 
@@ -103,6 +104,9 @@ get_option(Option, Msg) ->
 
 get_option(Option, #coap_message{options = Options}, Def) ->
     maps:get(Option, Options, Def).
+
+set_options(Options, Msg) ->
+    Msg#coap_message{options = Options}.
 
 extract_uri_query(Msg = #coap_message{}) ->
     expand_short_param_name(get_option(uri_query, Msg, #{})).
