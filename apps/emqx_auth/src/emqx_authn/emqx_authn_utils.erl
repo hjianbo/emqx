@@ -139,7 +139,7 @@ do_drop_invalid_attr([]) ->
 do_drop_invalid_attr([{K, V} | More]) ->
     case emqx_utils:is_restricted_str(K) of
         true ->
-            [{iolist_to_binary(K), iolist_to_binary(V)} | do_drop_invalid_attr(More)];
+            [{iolist_to_binary(K), V} | do_drop_invalid_attr(More)];
         false ->
             ?SLOG(debug, #{msg => "invalid_client_attr_dropped", attr_name => K}, #{
                 tag => "AUTHN"
