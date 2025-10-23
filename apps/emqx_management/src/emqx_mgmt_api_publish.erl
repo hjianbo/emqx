@@ -263,9 +263,11 @@ is_ok_deliver({_NodeOrShare, _MatchedTopic, {error, _}}) -> false.
 %% 153                Payload format invalid                  400
 publish_result_to_http_reply(#message{topic = <<"$delayed/", _/binary>>} = Message, []) ->
     {?ALL_IS_WELL, make_publish_response(Message)};
-publish_result_to_http_reply(_Message, []) ->
+publish_result_to_http_reply(Message, []) ->
     %% matched no subscriber
-    {?PARTIALLY_OK, make_publish_error_response(?RC_NO_MATCHING_SUBSCRIBERS)};
+    R1 = make_publish_response(Message),
+    R2 = make_publish_error_response(?RC_NO_MATCHING_SUBSCRIBERS),
+    {?PARTIALLY_OK, maps:merge(R1, R2)};
 publish_result_to_http_reply(Message, PublishResult) ->
     case lists:any(fun is_ok_deliver/1, PublishResult) of
         true ->
