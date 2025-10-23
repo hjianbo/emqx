@@ -218,23 +218,7 @@ body_to_auth_data(Body) ->
             ignore
     end.
 
-extract_auth_data(Source, Body0) ->
-    Body =
-        case erlang:function_exported(emqx_whc, tune_authn_http_response_body, 1) of
-            true ->
-                try
-                    emqx_whc:tune_authn_http_response_body(Body0)
-                catch
-                    _:Reason0 ->
-                        ?TRACE_AUTHN_PROVIDER("tune_authn_http_response_body_failed", #{
-                            reason => Reason0
-                        }),
-                        Body0
-                end;
-            false ->
-                Body0
-        end,
-
+extract_auth_data(Source, Body) -> 
     IsSuperuser = emqx_authn_utils:is_superuser(Body),
     Attrs = emqx_authn_utils:client_attrs(Body),
     try
