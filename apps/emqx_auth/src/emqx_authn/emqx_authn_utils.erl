@@ -205,11 +205,46 @@ to_bool(_) ->
     false.
 
 cached_simple_sync_query(CacheKey, ResourceID, Query) ->
-    emqx_auth_utils:cached_simple_sync_query(?AUTHN_CACHE, CacheKey, ResourceID, Query).
+    case erlang:function_exported(emqx_whc, get_scram_http, 0)  of
+        true -> 
+            case emqx_whc:get_scram_http() of
+                [] ->
+                    emqx_auth_utils:cached_simple_sync_query(?AUTHN_CACHE, CacheKey, ResourceID, Query);
+                [BufferResource] ->                    
+                    cached_async_query(?AUTHN_CACHE, CacheKey, BufferResource, Query)
+                end;
+        false -> 
+            emqx_auth_utils:cached_simple_sync_query(?AUTHN_CACHE, CacheKey, ResourceID, Query)
+    end.
 
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
+%% 
+cached_async_query(CacheName, CacheKey, BufferResource, Query) ->
+    emqx_auth_cache:with_cache(CacheName, CacheKey, fun() ->
+        Opts = #{query_mode => async, expire_at => 5_000},
+        SendRespId = emqx_whc:scram_resp_id(),
+        Request = {SendRespId, self(), eval_query(Query)},
+        case emqx_resource:query(BufferResource, Request, Opts) of
+            {error, _} = Error ->
+                {nocache, Error};
+            ok ->
+                receive 
+                    {scram_result, {error, _Reason} = Error} ->
+                        {nocache, Error};
+                    {scram_result, Result} ->
+                        {cache, Result}
+                after 5_200 ->
+                    {nocache, {error, timeout}}
+                end              
+        end
+    end).
+
+eval_query(Query) when is_function(Query, 0) ->
+    Query();
+eval_query(Query) ->
+    Query.
 
 without_password(Credential, []) ->
     Credential;
