@@ -593,13 +593,15 @@ on_kafka_ack(_Partition, partition_lost, ReplyFnAndArgs0, KafkaTopic) ->
 hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs, KafkaTopic) ->
     try
         %% Defined at emqx_resource_buffer_worker_internal.hrl
-        MinQuery = maps:get(min_query, ReplyFnAndArgs),
-        case element(1, MinQuery) of
+        {ReplyFn, [ReqContext]} = ReplyFnAndArgs,
+        MinQuery = maps:get(min_query, ReqContext),
+        case element(2, MinQuery) of
             {F, [Args]} when is_function(F, 2) andalso is_map(Args) ->
-                NewMinQuery = {F, [Args#{kafka_topic => KafkaTopic}]},
-                ReplyFnAndArgs#{min_query => NewMinQuery};
+                NewElem = {F, [Args#{kafka_topic => KafkaTopic}]},
+                NewMinQuery = setelement(2, MinQuery, NewElem),
+                {ReplyFn, [ReqContext#{min_query => NewMinQuery}]};
             _ ->
-                ReplyFnAndArgs
+                {ReplyFn, [ReqContext]}
         end
     catch
         error:_ ->
