@@ -28,7 +28,7 @@
 ]).
 
 -export([
-    on_kafka_ack/3,
+    on_kafka_ack/4,
     handle_telemetry_event/4
 ]).
 
@@ -564,7 +564,7 @@ do_send_msg(async, KafkaTopic, KafkaMessage, Producers, AsyncReplyFn) ->
     %%   for counters and gauges.
     Batch = [KafkaMessage],
     {_Partition, Pid} = wolff:send2(
-        Producers, KafkaTopic, Batch, {fun ?MODULE:on_kafka_ack/3, [AsyncReplyFn]}
+        Producers, KafkaTopic, Batch, {fun ?MODULE:on_kafka_ack/4, [AsyncReplyFn, KafkaTopic]}
     ),
     %% This Pid is returned, but not monitored by caller
     %% See emqx_resource_buffer_worker:simple_async_internal_buffer
@@ -572,19 +572,39 @@ do_send_msg(async, KafkaTopic, KafkaMessage, Producers, AsyncReplyFn) ->
 
 %% Wolff producer never gives up retrying
 %% so there can only be 'ok' results.
-on_kafka_ack(_Partition, Offset, ReplyFnAndArgs) when is_integer(Offset) ->
+on_kafka_ack(_Partition, Offset, ReplyFnAndArgs0, KafkaTopic) when is_integer(Offset) ->
+    ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% `emqx_rule_runtime:inc_action_metrics/2' is embedded inside reply function
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, ok);
-on_kafka_ack(_Partition, buffer_overflow_discarded, ReplyFnAndArgs) ->
+on_kafka_ack(_Partition, buffer_overflow_discarded, ReplyFnAndArgs0, KafkaTopic) ->
+    ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% wolff should bump the dropped_queue_full counter in handle_telemetry_event/4
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, buffer_overflow});
-on_kafka_ack(_Partition, message_too_large, ReplyFnAndArgs) ->
+on_kafka_ack(_Partition, message_too_large, ReplyFnAndArgs0, KafkaTopic) ->
+    ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% wolff should bump the message 'dropped' counter with handle_telemetry_event/4.
     %% however 'dropped' is not mapped to EMQX metrics name
     %% so we reply error here
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, message_too_large});
-on_kafka_ack(_Partition, partition_lost, ReplyFnAndArgs) ->
+on_kafka_ack(_Partition, partition_lost, ReplyFnAndArgs0, KafkaTopic) ->
+    ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, partition_lost}).
+
+hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs, KafkaTopic) ->
+    try
+        %% Defined at emqx_resource_buffer_worker_internal.hrl
+        MinQuery = maps:get(min_query, ReplyFnAndArgs),
+        case element(1, MinQuery) of
+            {F, [Args]} when is_function(F, 2) andalso is_map(Args) ->
+                NewMinQuery = {F, [Args#{kafka_topic => KafkaTopic}]},
+                ReplyFnAndArgs#{min_query => NewMinQuery};
+            _ ->
+                ReplyFnAndArgs
+        end
+    catch
+        error:_ ->
+            ReplyFnAndArgs
+    end.
 
 %% Note: since wolff client has its own replayq that is not managed by
 %% `emqx_resource_buffer_worker', we must avoid returning `disconnected' here.  Otherwise,

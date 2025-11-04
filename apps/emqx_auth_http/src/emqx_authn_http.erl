@@ -218,7 +218,7 @@ body_to_auth_data(Body) ->
             ignore
     end.
 
-extract_auth_data(Source, Body) -> 
+extract_auth_data(Source, Body) ->
     IsSuperuser = emqx_authn_utils:is_superuser(Body),
     Attrs = emqx_authn_utils:client_attrs(Body),
     try

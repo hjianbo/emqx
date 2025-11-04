@@ -99,7 +99,7 @@ destroy(#{resource_id := ResourceId}) ->
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
-%% 
+%%
 
 retrieve(
     Username,
@@ -149,37 +149,37 @@ handle_response(Headers, Body) ->
         {ok, maps:merge(AuthData, UserInfo)}
     end.
 
-inject_whc_access_info(State) ->         
+inject_whc_access_info(State) ->
     case erlang:function_exported(emqx_whc, inject_whc_access_info, 1) of
-                true ->
-                    try
-                        emqx_whc:inject_whc_access_info(State)
-                    catch
-                        _:Reason0 ->
-                        ?TRACE_AUTHN_PROVIDER("inject_whc_access_info_failed", #{
-                                reason => Reason0
-                            }),
-                            State
-                    end;
-                false ->
+        true ->
+            try
+                emqx_whc:inject_whc_access_info(State)
+            catch
+                _:Reason0 ->
+                    ?TRACE_AUTHN_PROVIDER("inject_whc_access_info_failed", #{
+                        reason => Reason0
+                    }),
                     State
-            end.
+            end;
+        false ->
+            State
+    end.
 
-tune_response(Body) ->    
-    case erlang:function_exported(emqx_whc,tune_authn_http_response_body, 1) of
-            true ->
-                try
-                    {ok, emqx_whc:tune_authn_http_response_body(Body)}
-                catch
-                    _:Reason0 ->
-                        ?TRACE_AUTHN_PROVIDER("tune_authn_http_response_body_failed", #{
-                            reason => Reason0
-                        }),
-                        {ok, Body}
-                end;
-            false ->
-                {ok, Body}
-        end.
+tune_response(Body) ->
+    case erlang:function_exported(emqx_whc, tune_authn_http_response_body, 1) of
+        true ->
+            try
+                {ok, emqx_whc:tune_authn_http_response_body(Body)}
+            catch
+                _:Reason0 ->
+                    ?TRACE_AUTHN_PROVIDER("tune_authn_http_response_body_failed", #{
+                        reason => Reason0
+                    }),
+                    {ok, Body}
+            end;
+        false ->
+            {ok, Body}
+    end.
 
 body_to_user_info(Body) ->
     Required0 = maps:with(?REQUIRED_USER_INFO_KEYS, Body),
