@@ -74,8 +74,9 @@ authenticate(
         method := Method,
         request_timeout := RequestTimeout,
         cache_key_template := CacheKeyTemplate
-    } = State
+    } = State0
 ) ->
+    State = emqx_authn_scram_restapi:inject_whc_access_info(State0),
     case generate_request(Credential, State) of
         {ok, Request} ->
             CacheKey = emqx_auth_template:cache_key(Credential, CacheKeyTemplate),
@@ -201,7 +202,8 @@ handle_response(Headers, Body) ->
     ContentType = proplists:get_value(<<"content-type">>, Headers),
     case safely_parse_body(ContentType, Body) of
         {ok, NBody} ->
-            body_to_auth_data(NBody);
+            {ok, NBody1} = emqx_authn_scram_restapi:tune_response(NBody),
+            body_to_auth_data(NBody1);
         {error, _Reason} ->
             ignore
     end.

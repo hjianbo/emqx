@@ -21,6 +21,11 @@
     destroy/1
 ]).
 
+-export([
+    tune_response/1,
+    inject_whc_access_info/1
+]).
+
 -define(REQUIRED_USER_INFO_KEYS, [
     <<"stored_key">>,
     <<"server_key">>,
