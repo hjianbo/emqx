@@ -210,6 +210,8 @@ handle_response(Headers, Body) ->
 
 body_to_auth_data(Body) ->
     case maps:get(<<"result">>, Body, <<"ignore">>) of
+        <<"ok">> ->
+            extract_auth_data(http, Body);
         <<"allow">> ->
             extract_auth_data(http, Body);
         <<"deny">> ->
