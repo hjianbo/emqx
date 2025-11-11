@@ -205,9 +205,9 @@ to_bool(_) ->
     false.
 
 cached_simple_sync_query(CacheKey, ResourceID, Query) ->
-    case erlang:function_exported(emqx_whc, get_scram_http, 0) of
+    case erlang:function_exported(emqx_whc_hacker, get_scram_http, 0) of
         true ->
-            case emqx_whc:get_scram_http() of
+            case emqx_whc_hacker:get_scram_http() of
                 [] ->
                     emqx_auth_utils:cached_simple_sync_query(
                         ?AUTHN_CACHE, CacheKey, ResourceID, Query
@@ -226,7 +226,7 @@ cached_simple_sync_query(CacheKey, ResourceID, Query) ->
 cached_async_query(CacheName, CacheKey, BufferResource, Query) ->
     emqx_auth_cache:with_cache(CacheName, CacheKey, fun() ->
         Opts = #{query_mode => async, expire_at => 5_000},
-        SendRespId = emqx_whc:scram_resp_id(),
+        SendRespId = emqx_whc_hacker:scram_resp_id(),
         Request = {SendRespId, self(), eval_query(Query)},
         case emqx_resource:query(BufferResource, Request, Opts) of
             {error, _} = Error ->

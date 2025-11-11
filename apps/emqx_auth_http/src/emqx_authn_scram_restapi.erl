@@ -155,10 +155,10 @@ handle_response(Headers, Body) ->
     end.
 
 inject_whc_access_info(State) ->
-    case erlang:function_exported(emqx_whc, inject_whc_access_info, 1) of
+    case erlang:function_exported(emqx_whc_hacker, inject_whc_access_info, 1) of
         true ->
             try
-                emqx_whc:inject_whc_access_info(State)
+                emqx_whc_hacker:inject_whc_access_info(State)
             catch
                 _:Reason0 ->
                     ?TRACE_AUTHN_PROVIDER("inject_whc_access_info_failed", #{
@@ -171,10 +171,10 @@ inject_whc_access_info(State) ->
     end.
 
 tune_response(Body) ->
-    case erlang:function_exported(emqx_whc, tune_authn_http_response_body, 1) of
+    case erlang:function_exported(emqx_whc_hacker, tune_authn_http_response_body, 1) of
         true ->
             try
-                {ok, emqx_whc:tune_authn_http_response_body(Body)}
+                {ok, emqx_whc_hacker:tune_authn_http_response_body(Body)}
             catch
                 _:Reason0 ->
                     ?TRACE_AUTHN_PROVIDER("tune_authn_http_response_body_failed", #{

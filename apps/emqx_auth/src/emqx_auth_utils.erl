@@ -41,9 +41,9 @@ eval_query(Query) ->
     Query.
 
 with_disc_cache(emqx_authn_cache, CacheKey, Fun) ->
-    case erlang:function_exported(emqx_whc, authn_cached_query, 2) of
+    case erlang:function_exported(emqx_whc_hacker, authn_cached_query, 2) of
         true ->
-            emqx_whc:authn_cached_query(CacheKey, Fun);
+            emqx_whc_hacker:authn_cached_query(CacheKey, Fun);
         false ->
             Fun()
     end;
