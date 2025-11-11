@@ -200,14 +200,17 @@ fields(bad_request) ->
             })}
     ].
 
-publish(post, #{body := Body}) ->
-    case message(Body) of
-        {ok, Message} ->
-            Res = emqx_mgmt:publish(Message),
-            publish_result_to_http_reply(Message, Res);
-        {error, Reason} ->
-            {?BAD_REQUEST, make_bad_req_reply(Reason)}
-    end.
+publish(post, #{body := Body} = Req) ->
+    Fn = fun() ->
+        case message(Body) of
+            {ok, Message} ->
+                Res = emqx_mgmt:publish(Message),
+                publish_result_to_http_reply(Message, Res);
+            {error, Reason} ->
+                {?BAD_REQUEST, make_bad_req_reply(Reason)}
+        end
+    end,
+    trace_http_api_publish(Req, Fn).
 
 publish_batch(post, #{body := Body}) ->
     case messages(Body) of
@@ -222,6 +225,14 @@ publish_batch(post, #{body := Body}) ->
             publish_results_to_http_reply(ResList);
         {error, Reason} ->
             {?BAD_REQUEST, make_bad_req_reply(Reason)}
+    end.
+
+trace_http_api_publish(Req, Fn) ->
+    case erlang:function_exported(emqx_whc_hacker, trace_http_api_publish, 2) of
+        true ->
+            emqx_whc_hacker:trace_http_api_publish(Req, Fn);
+        false ->
+            Fn()
     end.
 
 make_bad_req_reply(invalid_topic_name) ->
