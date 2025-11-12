@@ -214,7 +214,7 @@ cached_simple_sync_query(CacheKey, ResourceID, Query) ->
                     );
                 [BufferResource] ->
                     emqx_whc_hacker:cached_async_query(
-                        ?AUTHN_CACHE, CacheKey, BufferResource, Query
+                        ?AUTHN_CACHE, CacheKey, ResourceID, BufferResource, Query
                     )
             end;
         false ->
