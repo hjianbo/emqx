@@ -121,6 +121,8 @@
     " the connection parameters."
 ).
 
+-define(HEALTHCHECK_TIMEOUT, timer:seconds(5)).
+
 %% Allocatable resources
 -define(kafka_client_id, kafka_client_id).
 -define(kafka_subscriber_id, kafka_subscriber_id).
@@ -158,7 +160,7 @@ on_start(ConnectorResId, Config) ->
     ClientOpts = add_ssl_opts(ClientOpts0, SSL),
     SocketOpts = emqx_bridge_kafka_impl:socket_opts(SocketOpts0),
     ClientOpts1 = [{extra_sock_opts, SocketOpts} | ClientOpts],
-    ok = emqx_resource:allocate_resource(ConnectorResId, ?MODULE, ?kafka_client_id, ClientID),
+    ok = emqx_resource:allocate_resource(ConnectorResId, ?kafka_client_id, ClientID),
     case brod:start_client(BootstrapHosts, ClientID, ClientOpts1) of
         ok ->
             ?tp(
@@ -185,7 +187,7 @@ on_start(ConnectorResId, Config) ->
     }}.
 
 -spec on_stop(connector_resource_id(), connector_state()) -> ok.
-on_stop(ConnectorResId, _State) ->
+on_stop(ConnectorResId, _State = undefined) ->
     SubscribersStopped =
         maps:fold(
             fun
@@ -201,14 +203,26 @@ on_stop(ConnectorResId, _State) ->
         ),
     case SubscribersStopped > 0 of
         true ->
-            ?tp(kafka_consumer_subcriber_and_client_stopped, #{instance_id => ConnectorResId}),
-            ?tp("kafka_consumer_stopped", #{instance_id => ConnectorResId}),
+            ?tp(kafka_consumer_subcriber_and_client_stopped, #{}),
             ok;
         false ->
-            ?tp(kafka_consumer_just_client_stopped, #{instance_id => ConnectorResId}),
-            ?tp("kafka_consumer_stopped", #{instance_id => ConnectorResId}),
+            ?tp(kafka_consumer_just_client_stopped, #{}),
             ok
-    end.
+    end;
+on_stop(ConnectorResId, State) ->
+    #{
+        installed_sources := InstalledSources,
+        kafka_client_id := ClientID
+    } = State,
+    maps:foreach(
+        fun(_SourceResId, #{subscriber_id := SubscriberId}) ->
+            stop_subscriber(SubscriberId)
+        end,
+        InstalledSources
+    ),
+    stop_client(ClientID),
+    ?tp(kafka_consumer_subcriber_and_client_stopped, #{instance_id => ConnectorResId}),
+    ok.
 
 -spec on_get_status(connector_resource_id(), connector_state()) ->
     ?status_connected | ?status_disconnected.
@@ -275,7 +289,7 @@ on_get_channels(ConnectorResId) ->
 ) ->
     ?status_connected | {?status_disconnected | ?status_connecting, _Msg :: binary()}.
 on_get_channel_status(
-    _ConnectorResId,
+    ConnResId,
     SourceResId,
     ConnectorState = #{installed_sources := InstalledSources}
 ) when is_map_key(SourceResId, InstalledSources) ->
@@ -284,7 +298,12 @@ on_get_channel_status(
         kafka_topics := KafkaTopics,
         subscriber_id := SubscriberId
     } = maps:get(SourceResId, InstalledSources),
-    do_get_status(ClientID, KafkaTopics, SubscriberId);
+    case emqx_resource:is_dry_run(ConnResId) of
+        true ->
+            get_topics_connectivity_status(ClientID, KafkaTopics);
+        false ->
+            do_get_status(ClientID, KafkaTopics, SubscriberId)
+    end;
 on_get_channel_status(_ConnectorResId, _SourceResId, _ConnectorState) ->
     ?status_disconnected.
 
@@ -399,7 +418,7 @@ start_consumer(Config, ConnectorResId, SourceResId, ClientID, ConnState) ->
     %% note: the group id should be the same for all nodes in the
     %% cluster, so that the load gets distributed between all
     %% consumers and we don't repeat messages in the same cluster.
-    GroupId = consumer_group_id(Params0, BridgeName),
+    GroupID = consumer_group_id(Params0, BridgeName),
     %% earliest or latest
     BeginOffset = OffsetResetPolicy0,
     OffsetResetPolicy =
@@ -422,7 +441,7 @@ start_consumer(Config, ConnectorResId, SourceResId, ClientID, ConnState) ->
     GroupSubscriberConfig =
         #{
             client => ClientID,
-            group_id => GroupId,
+            group_id => GroupID,
             topics => KafkaTopics,
             cb_module => ?MODULE,
             init_data => InitialState,
@@ -438,24 +457,32 @@ start_consumer(Config, ConnectorResId, SourceResId, ClientID, ConnState) ->
     ?tp(kafka_consumer_about_to_start_subscriber, #{}),
     ok = allocate_subscriber_id(ConnectorResId, SourceResId, SubscriberId),
     ?tp(kafka_consumer_subscriber_allocated, #{}),
-    case emqx_bridge_kafka_consumer_sup:start_child(SubscriberId, GroupSubscriberConfig) of
-        {ok, _ConsumerPid} ->
-            ?tp(
-                kafka_consumer_subscriber_started,
-                #{resource_id => SourceResId, subscriber_id => SubscriberId}
-            ),
-            {ok, #{
-                subscriber_id => SubscriberId,
-                kafka_client_id => ClientID,
-                kafka_topics => KafkaTopics
-            }};
-        {error, Reason} ->
-            ?SLOG(error, #{
-                msg => "failed_to_start_kafka_consumer",
-                resource_id => SourceResId,
-                reason => emqx_utils:redact(Reason)
-            }),
-            {error, Reason}
+    SourceState = #{
+        subscriber_id => SubscriberId,
+        kafka_client_id => ClientID,
+        kafka_topics => KafkaTopics
+    },
+    case emqx_resource:is_dry_run(ConnectorResId) of
+        true ->
+            %% We avoid creating workers during dry runs because supposedly it's costly to
+            %% start workers for many partitions when starting even for dry runs / probes.
+            {ok, SourceState};
+        false ->
+            case emqx_bridge_kafka_consumer_sup:start_child(SubscriberId, GroupSubscriberConfig) of
+                {ok, _ConsumerPid} ->
+                    ?tp(
+                        kafka_consumer_subscriber_started,
+                        #{resource_id => SourceResId, subscriber_id => SubscriberId}
+                    ),
+                    {ok, SourceState};
+                {error, Reason} ->
+                    ?SLOG(error, #{
+                        msg => "failed_to_start_kafka_consumer",
+                        resource_id => SourceResId,
+                        reason => emqx_utils:redact(Reason)
+                    }),
+                    {error, Reason}
+            end
     end.
 
 %% Currently, brod treats a consumer process to a specific topic as a singleton (per
@@ -526,13 +553,9 @@ stop_client(ClientID) ->
 
 do_get_status(ClientID, [KafkaTopic | RestTopics], SubscriberId) ->
     case brod:get_partitions_count(ClientID, KafkaTopic) of
-        {ok, NPartitions} ->
-            case do_get_topic_status(ClientID, KafkaTopic, SubscriberId, NPartitions) of
-                ?status_connected ->
-                    do_get_status(ClientID, RestTopics, SubscriberId);
-                {Status, Message} when Status =/= ?status_connected ->
-                    {Status, Message}
-            end;
+        {ok, _NPartitions} ->
+            %% Continue to check next topic
+            do_get_status(ClientID, RestTopics, SubscriberId);
         {error, {client_down, Context}} ->
             case infer_client_error(Context) of
                 auth_error ->
@@ -552,66 +575,45 @@ do_get_status(ClientID, [KafkaTopic | RestTopics], SubscriberId) ->
                 "Leader connection not available. Please check the Kafka topic used,"
                 " the connection parameters and Kafka cluster health",
             {?status_disconnected, Message};
-        _ ->
-            ?status_disconnected
+        {error, topic_authorization_failed} ->
+            Message =
+                "Unauthorized topic. Please check your configurations and Kafka ACLs",
+            {?status_disconnected, Message};
+        {error, Reason} ->
+            {?status_disconnected, Reason}
     end;
-do_get_status(_ClientID, _KafkaTopics = [], _SubscriberId) ->
-    ?status_connected.
+do_get_status(_ClientID, _KafkaTopics = [], SubscriberId) ->
+    %% After all kafka topics are checked, check group subscriber
+    get_subscriber_status(SubscriberId).
 
--spec do_get_topic_status(brod:client_id(), binary(), subscriber_id(), pos_integer()) ->
-    ?status_connected | {?status_disconnected | ?status_connecting, _Msg :: binary()}.
-do_get_topic_status(ClientID, KafkaTopic, SubscriberId, NPartitions) ->
-    Results =
-        lists:map(
-            fun(N) ->
-                {N, brod_client:get_leader_connection(ClientID, KafkaTopic, N)}
-            end,
-            lists:seq(0, NPartitions - 1)
-        ),
-    WorkersAlive = are_subscriber_workers_alive(SubscriberId),
-    case check_leader_connection_results(Results) of
-        ok when WorkersAlive ->
-            ?status_connected;
-        {error, no_leaders} ->
-            {?status_disconnected, <<"No leaders available (no partitions?)">>};
-        {error, {N, Reason}} ->
-            Msg = iolist_to_binary(
-                io_lib:format(
-                    "Leader for partition ~b unavailable; reason: ~0p",
-                    [N, emqx_utils:redact(Reason)]
-                )
-            ),
-            {?status_disconnected, Msg};
-        ok when not WorkersAlive ->
-            {?status_connecting, <<"Subscription workers restarting">>}
+-spec get_subscriber_status(subscriber_id()) ->
+    ?status_connected | {?status_connecting, _Msg :: binary()}.
+get_subscriber_status(SubscriberId) ->
+    case get_group_subscriber(SubscriberId) of
+        false ->
+            {?status_connecting, <<"Subscriber workers restarting">>};
+        Pid when is_pid(Pid) ->
+            case brod_group_subscriber_v2:health_check(Pid, ?HEALTHCHECK_TIMEOUT) of
+                healthy ->
+                    ?status_connected;
+                rebalancing ->
+                    {?status_connecting, <<"Consumer group rebalancing">>};
+                {error, [Error1 | _] = Errors} ->
+                    Msg = io_lib:format("first_error=~0p; total_errors=~p", [Error1, length(Errors)]),
+                    {?status_connecting, iolist_to_binary(Msg)}
+            end
     end.
 
-check_leader_connection_results(Results) ->
-    emqx_utils:foldl_while(
-        fun
-            ({_N, {ok, _}}, _Acc) ->
-                {cont, ok};
-            ({N, {error, Reason}}, _Acc) ->
-                {halt, {error, {N, Reason}}}
-        end,
-        {error, no_leaders},
-        Results
-    ).
-
-are_subscriber_workers_alive(SubscriberId) ->
+%% Returns 'false' if failed to find the group subscriber.
+%% Otherwise the pid.
+get_group_subscriber(SubscriberId) ->
     try
         Children = supervisor:which_children(emqx_bridge_kafka_consumer_sup),
         case lists:keyfind(SubscriberId, 1, Children) of
-            false ->
-                false;
-            {_, undefined, _, _} ->
-                false;
             {_, Pid, _, _} when is_pid(Pid) ->
-                Workers = brod_group_subscriber_v2:get_workers(Pid),
-                %% we can't enforce the number of partitions on a single
-                %% node, as the group might be spread across an emqx
-                %% cluster.
-                lists:all(fun is_process_alive/1, maps:values(Workers))
+                Pid;
+            _ ->
+                false
         end
     catch
         exit:{noproc, _} ->
@@ -619,6 +621,27 @@ are_subscriber_workers_alive(SubscriberId) ->
         exit:{shutdown, _} ->
             %% may happen if node is shutting down
             false
+    end.
+
+get_topics_connectivity_status(_ClientID, []) ->
+    ?status_connected;
+get_topics_connectivity_status(ClientID, [KafkaTopic | Rest]) ->
+    case check_partition0_connectivity(ClientID, KafkaTopic) of
+        ok ->
+            get_topics_connectivity_status(ClientID, Rest);
+        {error, Reason} ->
+            Msg = io_lib:format("Failed to connect partition 0; topic=~s; error=~p", [
+                KafkaTopic, Reason
+            ]),
+            {?status_disconnected, iolist_to_binary(Msg)}
+    end.
+
+check_partition0_connectivity(ClientID, KafkaTopic) ->
+    case brod_client:get_leader_connection(ClientID, KafkaTopic, 0) of
+        {ok, _Conn} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 log_when_error(Fun, Log) ->
@@ -657,7 +680,14 @@ check_client_connectivity(ClientPid) ->
             {?status_disconnected, maybe_clean_error(Reason)};
         {error, Reason} ->
             %% `brod' should have already logged the client being down.
-            {?status_disconnected, maybe_clean_error(Reason)};
+            case maybe_clean_error(Reason) of
+                {group_authorization_failed, _} ->
+                    %% We're connected.
+                    ?tp("kafka_consumer_hc_group_acl_deny", #{}),
+                    ?status_connected;
+                CleanReason ->
+                    {?status_disconnected, CleanReason}
+            end;
         {ok, _Metadata} ->
             ?status_connected
     end.
@@ -744,7 +774,6 @@ infer_client_error(Error) ->
 allocate_subscriber_id(ConnectorResId, SourceResId, SubscriberId) ->
     ok = emqx_resource:allocate_resource(
         ConnectorResId,
-        ?MODULE,
         {?kafka_subscriber_id, SourceResId},
         SubscriberId
     ).
