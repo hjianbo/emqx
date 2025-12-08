@@ -87,6 +87,7 @@ authenticate(
         retrieve(Username, Credential, State)
     end,
     OnErrFun = fun(Msg, Reason) ->
+        notify_scram_authn_error(Credential, Msg, Reason),
         ?TRACE_AUTHN_PROVIDER(Msg, #{
             reason => Reason
         })
@@ -129,15 +130,38 @@ retrieve(
             }),
             case Response of
                 {ok, 200, Headers, Body} ->
-                    handle_response(Headers, Body);
-                {ok, _StatusCode, _Headers} ->
+                    case handle_response(Headers, Body) of
+                        {ok, UserInfo} ->
+                            {ok, UserInfo};
+                        {error, Reason1} ->
+                            Hint = iolist_to_binary(
+                                io_lib:format("Handle HTTP response failed: ~p", [Reason1])
+                            ),
+                            notify_scram_authn_error(
+                                Credential, "parse_scram_restapi_response_failed", Hint
+                            ),
+                            {error, Reason1}
+                    end;
+                {ok, StatusCode, _Headers} ->
+                    Hint = iolist_to_binary(
+                        io_lib:format("Invalid HTTP response code: ~p", [StatusCode])
+                    ),
+                    notify_scram_authn_error(Credential, "request_scram_restapi_failed", Hint),
                     {error, bad_response};
-                {ok, _StatusCode, _Headers, _Body} ->
+                {ok, StatusCode, _Headers, _Body} ->
+                    Hint = iolist_to_binary(
+                        io_lib:format("Invalid HTTP response code: ~p", [StatusCode])
+                    ),
+                    notify_scram_authn_error(Credential, "request_scram_restapi_failed", Hint),
                     {error, bad_response};
                 {error, _Reason} = Error ->
+                    Hint = iolist_to_binary(io_lib:format("Reason: ~p", [Error])),
+                    notify_scram_authn_error(Credential, "request_scram_restapi_failed", Hint),
                     Error
             end;
         {error, Reason} ->
+            Hint = iolist_to_binary(io_lib:format("Generate HTTP request failed: ~p", [Reason])),
+            notify_scram_authn_error(Credential, "request_scram_restapi_failed", Hint),
             ?TRACE_AUTHN_PROVIDER("generate_request_failed", #{
                 reason => Reason
             }),
@@ -169,6 +193,20 @@ inject_whc_access_info(State) ->
         false ->
             State
     end.
+
+notify_scram_authn_error(Credential, ErrMsg, Reason) ->
+    case erlang:function_exported(emqx_whc_hacker, notify_scram_authn_error, 3) of
+        true ->
+            try
+                emqx_whc_hacker:notify_scram_authn_error(Credential, ErrMsg, Reason)
+            catch
+                _:_ ->
+                    ok
+            end;
+        false ->
+            ok
+    end,
+    ok.
 
 tune_response(Body) ->
     case erlang:function_exported(emqx_whc_hacker, tune_authn_http_response_body, 1) of
