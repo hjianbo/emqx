@@ -942,7 +942,7 @@ preproc_data_template(WriteToTable, DataList) ->
 preproc_data_template(_, [], Acc) ->
     lists:reverse(Acc);
 preproc_data_template(
-    _WriteToTable = false,
+    WriteToTable = false,
     [
         #{
             timestamp := Timestamp,
@@ -960,9 +960,9 @@ preproc_data_template(
         data_type => string:uppercase(to_bin(DataType)),
         value => emqx_placeholder:preproc_tmpl(Value)
     },
-    preproc_data_template(tree, T, [Template | Acc]);
+    preproc_data_template(WriteToTable, T, [Template | Acc]);
 preproc_data_template(
-    _WriteToTable = true,
+    WriteToTable = true,
     [
         #{
             timestamp := Timestamp,
@@ -982,7 +982,7 @@ preproc_data_template(
         column_category => ColumnCategory,
         value => emqx_placeholder:preproc_tmpl(Value)
     },
-    preproc_data_template(table, T, [Template | Acc]);
+    preproc_data_template(WriteToTable, T, [Template | Acc]);
 preproc_data_template(_, [_Data | _], _) ->
     throw(<<"Invalid data template">>).
 
