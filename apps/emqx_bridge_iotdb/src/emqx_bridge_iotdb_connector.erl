@@ -1290,9 +1290,9 @@ to_bin(Bin) when is_binary(Bin) ->
 check_channel_exists(ChannelId, Channels) ->
     case maps:is_key(ChannelId, Channels) of
         true ->
-            ok;
+            {error, already_exists};
         false ->
-            {error, already_exists}
+            ok
     end.
 
 check_write_to_table(_WriteToTable = true, _SqlDialect = table) ->
