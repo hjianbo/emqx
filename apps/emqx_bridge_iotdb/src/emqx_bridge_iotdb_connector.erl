@@ -743,9 +743,7 @@ on_add_channel(
         %% update IoTDB channel
         Channel = Parameter#{
             device_id => DeviceIdTemplate,
-            %% The template process will reverse the order of the values
-            %% so we can reverse the template here to reduce some runtime cost
-            data := lists:reverse(DataTemplate)
+            data := DataTemplate
         },
         Channels2 = Channels#{ChannelId => Channel},
         {ok, OldState#{channels := Channels2}}
@@ -1247,7 +1245,7 @@ proc_record_data(
             {error, {invalid_data, Reason}}
     end;
 proc_record_data([], _Msg, MeasurementAcc, TypeAcc, ValueAcc) ->
-    {ok, MeasurementAcc, TypeAcc, ValueAcc}.
+    {ok, lists:reverse(MeasurementAcc), lists:reverse(TypeAcc), lists:reverse(ValueAcc)}.
 
 proc_record_data_for_table(
     [
@@ -1277,7 +1275,7 @@ proc_record_data_for_table(
             {error, {invalid_data, Reason}}
     end;
 proc_record_data_for_table([], _Msg, MeasurementAcc, ValueAcc) ->
-    {ok, MeasurementAcc, ValueAcc}.
+    {ok, lists:reverse(MeasurementAcc), lists:reverse(ValueAcc)}.
 
 init_connector_state(Config) ->
     SqlDialect = maps:get(sql_dialect, Config, tree),
