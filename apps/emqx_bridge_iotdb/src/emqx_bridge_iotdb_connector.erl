@@ -1027,12 +1027,40 @@ try_render_records([{ChannelId, _} | _] = Msgs, #{driver := Driver, channels := 
             InitialAcc = init_render_acc(Driver, WriteToTable, Channel),
             case do_render_record(Msgs, Channel, Driver, InitialAcc) of
                 {ok, Acc} ->
-                    {ok, WriteToTable, Acc};
+                    case WriteToTable of
+                        true ->
+                            %% Due to the measurements are variables,
+                            %% we need to validate the consistency in multiple records.
+                            Acc1 = validate_measurements_consistency(Acc),
+                            {ok, WriteToTable, Acc1};
+                        false ->
+                            {ok, WriteToTable, Acc}
+                    end;
                 Error ->
                     Error
             end;
         _ ->
             {error, {unrecoverable_error, {invalid_channel_id, ChannelId}}}
+    end.
+
+validate_measurements_consistency(#{measurements := [Used | More]} = Acc) ->
+    do_validate_measurements_consistency(Used, More),
+    Acc#{measurements => Used};
+validate_measurements_consistency(#{column_names := [Used | More]} = Acc) ->
+    do_validate_measurements_consistency(Used, More),
+    Acc#{column_names => Used}.
+
+do_validate_measurements_consistency(Used, More) ->
+    case lists:all(fun(M) -> M =:= Used end, More) of
+        false ->
+            ?SLOG(warning, #{
+                msg => "ignore_inconsistent_column_names_in_batch",
+                hint => "Use the first record's column names to insert into the table",
+                ignored => More,
+                used => Used
+            });
+        true ->
+            ok
     end.
 
 init_render_acc(Driver, _WriteToTable = false, Channel) ->
