@@ -1065,13 +1065,14 @@ init_render_acc(Driver = thrift, _WriteToTable = true, Channel) ->
     ColumnCategories = encode_column_categories(Driver, maps:get(data, Channel)),
     DataTypes = encode_data_types(maps:get(data, Channel)),
     #{
-        table => maps:get(device_id, Channel),
+        'deviceId' => maps:get(device_id, Channel),
         measurements => [],
         'columnCategories' => ColumnCategories,
-        data_types => DataTypes,
+        dtypes => DataTypes,
         timestamps => [],
         values => [],
-        'isAligned' => IsAligned
+        'isAligned' => IsAligned,
+        'writeToTable' => true
     }.
 
 append_record(
