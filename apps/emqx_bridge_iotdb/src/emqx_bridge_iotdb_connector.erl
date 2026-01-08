@@ -1083,7 +1083,7 @@ init_render_acc(Driver = restapi, _WriteToTable = true, Channel) ->
         column_categories => ColumnCategories,
         data_types => DataTypes,
         timestamps => [],
-        values => [],
+        values => lists:duplicate(length(DataTypes), []),
         is_aligned => IsAligned
     };
 init_render_acc(Driver = thrift, _WriteToTable = true, Channel) ->
@@ -1096,7 +1096,7 @@ init_render_acc(Driver = thrift, _WriteToTable = true, Channel) ->
         'columnCategories' => ColumnCategories,
         dtypes => DataTypes,
         timestamps => [],
-        values => [],
+        values => lists:duplicate(length(DataTypes), []),
         'isAligned' => IsAligned,
         'writeToTable' => true
     }.
@@ -1137,13 +1137,13 @@ append_record(
     #{
         timestamps := TsL,
         column_names := ColumnNamesL,
-        values_list := ValL
+        values := ValL
     } = Records
 ) ->
     Records#{
         timestamps := [Ts | TsL],
         column_names := [Measurements | ColumnNamesL],
-        values_list := [Vals | ValL]
+        values := append_value(Vals, ValL)
     };
 append_record(
     _Driver = thrift,
@@ -1162,8 +1162,18 @@ append_record(
     Records#{
         timestamps := [Ts | TsL],
         measurements := [Measurements | MeasurementsL],
-        values := [Vals | ValsL]
+        values := append_value(Vals, ValsL)
     }.
+
+append_value(Vals, ValsL) ->
+    LengthVals = length(Vals),
+    LengthValsL = length(ValsL),
+    case LengthVals =:= LengthValsL of
+        true ->
+            lists:zipwith(fun(Val, ValL) -> lists:reverse([Val | ValL]) end, Vals, ValsL);
+        false ->
+            throw(<<"The values are not consistent in the batch">>)
+    end.
 
 is_aligned_name(restapi) ->
     is_aligned;
