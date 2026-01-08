@@ -538,9 +538,9 @@ on_query(
     }),
 
     case try_render_records([Req], State) of
-        {ok, Records} ->
+        {ok, WriteToTable, Records} ->
             handle_response(
-                do_on_query(InstanceId, ChannelId, Records, State)
+                do_on_query(InstanceId, ChannelId, WriteToTable, Records, State)
             );
         Error ->
             Error
@@ -562,7 +562,7 @@ on_query_async(
         state => emqx_utils:redact(State)
     }),
     case try_render_records([Req], State) of
-        {ok, Records} ->
+        {ok, _WriteToTable, Records} ->
             ReplyFunAndArgs =
                 {
                     fun(Result) ->
@@ -606,7 +606,7 @@ on_batch_query_async(
         state => emqx_utils:redact(State)
     }),
     case try_render_records(Requests, State) of
-        {ok, Records} ->
+        {ok, _WriteToTable, Records} ->
             ReplyFunAndArgs =
                 {
                     fun(Result) ->
@@ -651,9 +651,9 @@ on_batch_query(
     }),
 
     case try_render_records(Requests, State) of
-        {ok, Records} ->
+        {ok, WriteToTable, Records} ->
             handle_response(
-                do_on_query(InstId, ChannelId, Records, State)
+                do_on_query(InstId, ChannelId, WriteToTable, Records, State)
             );
         Error ->
             Error
@@ -986,12 +986,15 @@ preproc_data_template(
 preproc_data_template(_, [_Data | _], _) ->
     throw(<<"Invalid data template">>).
 
-do_on_query(InstanceId, ChannelId, Data, #{driver := restapi} = State) ->
+do_on_query(InstanceId, ChannelId, _WriteToTable, Data, #{driver := restapi} = State) ->
     %% HTTP connector already calls `emqx_trace:rendered_action_template`.
     emqx_bridge_http_connector:on_query(InstanceId, {ChannelId, Data}, State);
-do_on_query(InstanceId, ChannelId, Data, #{driver := thrift} = _State) ->
+do_on_query(InstanceId, ChannelId, _WriteToTable = false, Data, #{driver := thrift} = _State) ->
     emqx_trace:rendered_action_template(ChannelId, #{records => Data}),
-    ecpool:pick_and_do(InstanceId, {iotdb, insert_records, [Data]}, no_handover).
+    ecpool:pick_and_do(InstanceId, {iotdb, insert_records, [Data]}, no_handover);
+do_on_query(InstanceId, ChannelId, _WriteToTable = true, Data, #{driver := thrift} = _State) ->
+    emqx_trace:rendered_action_template(ChannelId, #{records => Data}),
+    ecpool:pick_and_do(InstanceId, {iotdb, insert_tablet, [Data]}, no_handover).
 
 %% 1. The default timeout in Thrift is `infinity`, but it may cause stuck
 %% 2. The schema of `timeout` accepts a zero value, but the Thrift driver not
@@ -1024,7 +1027,12 @@ try_render_records([{ChannelId, _} | _] = Msgs, #{driver := Driver, channels := 
         {ok, Channel} ->
             WriteToTable = maps:get(write_to_table, Channel, false),
             InitialAcc = init_render_acc(Driver, WriteToTable, Channel),
-            do_render_record(Msgs, Channel, Driver, InitialAcc);
+            case do_render_record(Msgs, Channel, Driver, InitialAcc) of
+                {ok, Acc} ->
+                    {ok, WriteToTable, Acc};
+                Error ->
+                    Error
+            end;
         _ ->
             {error, {unrecoverable_error, {invalid_channel_id, ChannelId}}}
     end.
