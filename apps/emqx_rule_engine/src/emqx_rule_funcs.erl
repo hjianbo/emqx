@@ -34,6 +34,10 @@
     coalesce_ne/2
 ]).
 
+-export([
+    convert_to_batch_sql/3
+]).
+
 %% Arithmetic Funcs
 -export([
     '+'/2,
@@ -1323,3 +1327,55 @@ uuid_str(UUID, DisplayOpt) ->
 %%------------------------------------------------------------------------------
 getenv(Env) ->
     emqx_variform_bif:getenv(Env).
+
+%% 入参 Data 是解析后的 Erlang Map
+%% 示例: #{ <<"timestamp">> => 1767926999294, <<"values">> => #{ <<"A.B.C">> => true, ... } }
+convert_to_batch_sql(Batch, Table, Data) ->
+    Timestamp = maps:get(<<"timestamp">>, Data),
+    ValuesMap = maps:get(<<"values">>, Data),
+    %% 1. 将 Map 转换为 [{Key, Value}] 列表
+    Entries = maps:to_list(ValuesMap),
+    %% 2. 按 1000 条一组进行切分
+    Chunks = chunk_list(Entries, Batch),
+    %% 3. 对每一组生成一个长的 INSERT 语句
+    lists:map(
+        fun(Chunk) ->
+            build_insert_statement(Timestamp, Table, Chunk)
+        end,
+        Chunks
+    ).
+
+%% 将列表按 N 个一组切分
+chunk_list([], _) ->
+    [];
+chunk_list(List, N) ->
+    {Chunk, Rest} =
+        case erlang:length(List) >= N of
+            true -> lists:split(N, List);
+            false -> {List, []}
+        end,
+    [Chunk | chunk_list(Rest, N)].
+
+%% 构建单条批量 SQL
+build_insert_statement(Timestamp, Table, Chunk) ->
+    %% 处理每一条记录
+    ValuesSQL = lists:map(
+        fun({FullKey, Val}) ->
+            %% 替换 . 为 _
+            SafeKey = binary:replace(FullKey, <<".">>, <<"_">>, [global]),
+            %% 转换为字符串格式
+            ValStr =
+                case Val of
+                    true -> <<"true">>;
+                    false -> <<"false">>;
+                    V -> list_to_binary(io_lib:format("~p", [V]))
+                end,
+            io_lib:format(
+                " `~s` USING ~s TAGS ('~s') VALUES (~p, ~s)",
+                [SafeKey, Table, FullKey, Timestamp, ValStr]
+            )
+        end,
+        Chunk
+    ),
+    %% 合并头部和所有记录
+    list_to_binary([ValuesSQL]).
