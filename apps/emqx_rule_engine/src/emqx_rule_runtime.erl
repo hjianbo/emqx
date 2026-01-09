@@ -113,7 +113,11 @@ do_apply_rule(
     ok = inc_rule_matched_metrics(RuleResId),
     clear_rule_payload(),
     try
-        do_apply_rule2(Rule, Columns, Envs)
+        Ts1 = erlang:monotonic_time(nanosecond),
+        Result = do_apply_rule2(Rule, Columns, Envs),
+        Ts2 = erlang:monotonic_time(nanosecond),
+        io:format("handle_action_list ts: ~p~n", [(Ts2 - Ts1) / 1000000]),
+        Result
     catch
         %% ignore the errors if select or match failed
         _:Reason = {select_and_transform_error, Error} ->

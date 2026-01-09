@@ -176,7 +176,7 @@ sync_query(Id, Request, Opts0) ->
     ?tp(sync_query, #{id => Id, request => Request, query_opts => Opts0}),
     Opts1 = ensure_timeout_query_opts(Opts0, sync),
     Opts = ensure_expire_at(Opts1),
-    PickKey = maps:get(pick_key, Opts, self()),
+    PickKey = maps:get(pick_key, Opts, rand:uniform(256)),
     Timeout = maps:get(timeout, Opts),
     emqx_resource_metrics:matched_inc(Id),
     pick_call(Id, PickKey, #query{request = Request, query_opts = Opts}, Timeout).
@@ -186,7 +186,7 @@ async_query(Id, Request, Opts0) ->
     ?tp(async_query, #{id => Id, request => Request, query_opts => Opts0}),
     Opts1 = ensure_timeout_query_opts(Opts0, async),
     Opts = ensure_expire_at(Opts1),
-    PickKey = maps:get(pick_key, Opts, self()),
+    PickKey = maps:get(pick_key, Opts, rand:uniform(256)),
     emqx_resource_metrics:matched_inc(Id),
     pick_cast(Id, PickKey, #query{request = Request, query_opts = Opts}).
 
