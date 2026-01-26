@@ -185,6 +185,13 @@ jobs:
             otp: ${{ inputs.otp_vsn }}
             builder: ${{ inputs.builder_vsn }}
             elixir: ${{ inputs.elixir_vsn }}
+          - profile: ${{ inputs.profile }}
+            os: el7
+            arch: arm64
+            with_elixir: 'no'
+            otp: ${{ inputs.otp_vsn }}
+            builder: ${{ inputs.builder_vsn }}
+            elixir: ${{ inputs.elixir_vsn }}
 
     defaults:
       run:
