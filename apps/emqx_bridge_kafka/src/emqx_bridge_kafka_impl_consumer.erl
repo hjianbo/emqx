@@ -160,7 +160,7 @@ on_start(ConnectorResId, Config) ->
     ClientOpts = add_ssl_opts(ClientOpts0, SSL),
     SocketOpts = emqx_bridge_kafka_impl:socket_opts(SocketOpts0),
     ClientOpts1 = [{extra_sock_opts, SocketOpts} | ClientOpts],
-    ok = emqx_resource:allocate_resource(ConnectorResId, ?kafka_client_id, ClientID),
+    ok = emqx_resource:allocate_resource(ConnectorResId, ?MODULE, ?kafka_client_id, ClientID),
     case brod:start_client(BootstrapHosts, ClientID, ClientOpts1) of
         ok ->
             ?tp(
@@ -203,10 +203,12 @@ on_stop(ConnectorResId, _State = undefined) ->
         ),
     case SubscribersStopped > 0 of
         true ->
-            ?tp(kafka_consumer_subcriber_and_client_stopped, #{}),
+            ?tp(kafka_consumer_subcriber_and_client_stopped, #{instance_id => ConnectorResId}),
+            ?tp("kafka_consumer_stopped", #{instance_id => ConnectorResId}),
             ok;
         false ->
-            ?tp(kafka_consumer_just_client_stopped, #{}),
+            ?tp(kafka_consumer_just_client_stopped, #{instance_id => ConnectorResId}),
+            ?tp("kafka_consumer_stopped", #{instance_id => ConnectorResId}),
             ok
     end;
 on_stop(ConnectorResId, State) ->
@@ -774,6 +776,7 @@ infer_client_error(Error) ->
 allocate_subscriber_id(ConnectorResId, SourceResId, SubscriberId) ->
     ok = emqx_resource:allocate_resource(
         ConnectorResId,
+        ?MODULE,
         {?kafka_subscriber_id, SourceResId},
         SubscriberId
     ).
