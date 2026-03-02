@@ -7,5 +7,4 @@ scripts/* text eol=lf
 *.jpg -text
 *.png -text
 *.pdf -text
-*.beam -text
 scripts/erlfmt -text

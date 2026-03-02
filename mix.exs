@@ -15,11 +15,9 @@ defmodule EMQXUmbrella.MixProject do
 
   The following profiles are valid:
 
-    * `emqx`
     * `emqx-enterprise`
-    * `emqx-pkg`
     * `emqx-enterprise-pkg`
-    * `dev` -> same as `emqx`, for convenience
+    * `dev` -> same as `emqx-enterprise`, for convenience
 
   ## Release Environment Variables
 
@@ -41,7 +39,7 @@ defmodule EMQXUmbrella.MixProject do
     if new_mix_build?() do
       [
         apps_path: "apps",
-        erlc_options: erlc_options(profile_info, version),
+        erlc_options: erlc_options(version),
         version: version,
         deps: deps(profile_info, version),
         releases: releases(),
@@ -52,7 +50,7 @@ defmodule EMQXUmbrella.MixProject do
       # manager for all umbrella apps.
       [
         app: :emqx_mix,
-        erlc_options: erlc_options(profile_info, version),
+        erlc_options: erlc_options(version),
         version: version,
         deps: deps(profile_info, version),
         releases: releases(),
@@ -96,7 +94,7 @@ defmodule EMQXUmbrella.MixProject do
 
   ## TODO: this should be removed once we migrate the release build to mix
   defp old_deps(profile_info, version) do
-    rebar3_umbrella_apps = emqx_apps(profile_info, version) ++ enterprise_deps(profile_info)
+    rebar3_umbrella_apps = emqx_apps(profile_info, version) ++ data_integration_deps()
 
     common_deps() ++
       extra_release_apps() ++
@@ -108,9 +106,9 @@ defmodule EMQXUmbrella.MixProject do
   def overridden_deps() do
     [
       common_dep(:lc),
-      common_dep(:typerefl),
       # in conflict between typerefl and emqx_utils
-      common_dep(:erlang_qq),
+      {:erlang_qq, github: "k32/erlang_qq", tag: "1.0.0", override: true},
+      common_dep(:typerefl),
       common_dep(:ehttpc),
       common_dep(:gproc),
       common_dep(:jiffy),
@@ -138,7 +136,7 @@ defmodule EMQXUmbrella.MixProject do
       # in conflict by emqx_connector and system_monitor
       common_dep(:epgsql),
       # in conflict by emqx and observer_cli
-      {:recon, github: "ferd/recon", tag: "2.5.1", override: true},
+      {:recon, github: "ferd/recon", tag: "2.5.6", override: true},
       common_dep(:jsx),
       # in conflict by erlavro and rocketmq
       common_dep(:jsone),
@@ -150,7 +148,7 @@ defmodule EMQXUmbrella.MixProject do
       common_dep(:ranch),
       # in conflict by grpc and eetcd
       common_dep(:gpb),
-      {:hackney, github: "emqx/hackney", tag: "1.18.1-1", override: true},
+      common_dep(:hackney),
       # set by hackney (dependency)
       {:ssl_verify_fun, "1.1.7", override: true},
       common_dep(:bcrypt),
@@ -164,6 +162,8 @@ defmodule EMQXUmbrella.MixProject do
       # in conflict by erlavro
       common_dep(:snappyer),
       common_dep(:crc32cer),
+      # transitive dependency of pulsar-client-erl, and direct dep in s3tables bridge
+      common_dep(:murmerl3),
       common_dep(:unicode_util_compat)
     ]
   end
@@ -186,49 +186,54 @@ defmodule EMQXUmbrella.MixProject do
     end
   end
 
-  def common_dep(:ekka), do: {:ekka, github: "emqx/ekka", tag: "0.21.2", override: true}
-  def common_dep(:esockd), do: {:esockd, github: "emqx/esockd", tag: "5.13.0", override: true}
-  def common_dep(:gproc), do: {:gproc, "1.0.0", override: true}
-  def common_dep(:hocon), do: {:hocon, github: "emqx/hocon", tag: "0.44.0", override: true}
+  def common_dep(:ekka), do: {:ekka, github: "emqx/ekka", tag: "0.23.0", override: true}
+  def common_dep(:esockd), do: {:esockd, github: "emqx/esockd", tag: "5.14.0", override: true}
+  def common_dep(:gproc), do: {:gproc, github: "emqx/gproc", tag: "0.9.0.1", override: true}
+  def common_dep(:hocon), do: {:hocon, github: "emqx/hocon", tag: "0.45.3", override: true}
   def common_dep(:lc), do: {:lc, github: "emqx/lc", tag: "0.3.4", override: true}
   # in conflict by ehttpc and emqtt
   def common_dep(:gun), do: {:gun, "2.1.0", override: true}
   # in conflict by cowboy_swagger and cowboy
-  def common_dep(:ranch), do: {:ranch, github: "emqx/ranch", tag: "1.8.1-emqx", override: true}
+  def common_dep(:ranch), do: {:ranch, github: "emqx/ranch", tag: "1.8.1-emqx-1", override: true}
 
   def common_dep(:ehttpc),
-    do: {:ehttpc, github: "emqx/ehttpc", tag: "0.7.3", override: true}
+    do: {:ehttpc, github: "emqx/ehttpc", tag: "0.7.1", override: true}
 
-  def common_dep(:jiffy), do: {:jiffy, github: "emqx/jiffy", tag: "1.0.6", override: true}
+  def common_dep(:jiffy), do: {:jiffy, "1.1.2", override: true}
 
   def common_dep(:grpc),
     do:
       {:grpc,
-       github: "emqx/grpc-erl", tag: "0.7.1", override: true, system_env: emqx_app_system_env()}
+       github: "emqx/grpc-erl", tag: "0.7.2", override: true, system_env: emqx_app_system_env()}
 
-  def common_dep(:cowboy), do: {:cowboy, github: "emqx/cowboy", tag: "2.9.2", override: true}
+  def common_dep(:cowboy),
+    do: {:cowboy, github: "emqx/cowboy", tag: "2.13.0-emqx-1", override: true}
+
+  def common_dep(:hackney),
+    do: {:hackney, github: "emqx/hackney", tag: "1.18.1-1", override: true}
+
   def common_dep(:jsone), do: {:jsone, github: "emqx/jsone", tag: "1.7.1", override: true}
-  def common_dep(:ecpool), do: {:ecpool, github: "emqx/ecpool", tag: "0.6.2", override: true}
+  def common_dep(:ecpool), do: {:ecpool, github: "emqx/ecpool", tag: "0.6.1", override: true}
   def common_dep(:replayq), do: {:replayq, github: "emqx/replayq", tag: "0.4.1", override: true}
   def common_dep(:jsx), do: {:jsx, github: "talentdeficit/jsx", tag: "v3.1.0", override: true}
   # in conflict by emqtt and hocon
   def common_dep(:getopt), do: {:getopt, "1.0.2", override: true}
-  def common_dep(:telemetry), do: {:telemetry, "1.1.0", override: true}
+  def common_dep(:telemetry), do: {:telemetry, "1.3.0", override: true}
   # in conflict by grpc and eetcd
-  def common_dep(:gpb), do: {:gpb, "4.21.5", override: true, runtime: false}
+  def common_dep(:gpb), do: {:gpb, "4.21.1", override: true, runtime: false}
   def common_dep(:ra), do: {:ra, github: "emqx/ra", tag: "v2.15.2-emqx-3", override: true}
 
   # in conflict by emqx_connector and system_monitor
   def common_dep(:epgsql), do: {:epgsql, github: "emqx/epgsql", tag: "4.7.1.4", override: true}
   def common_dep(:sasl_auth), do: {:sasl_auth, "2.3.3", override: true}
-  def common_dep(:gen_rpc), do: {:gen_rpc, github: "emqx/gen_rpc", tag: "3.4.1", override: true}
+  def common_dep(:gen_rpc), do: {:gen_rpc, github: "emqx/gen_rpc", tag: "3.4.3", override: true}
 
   def common_dep(:system_monitor),
-    do: {:system_monitor, github: "ieQu1/system_monitor", tag: "3.0.5"}
+    do: {:system_monitor, github: "ieQu1/system_monitor", tag: "3.0.6"}
 
   def common_dep(:uuid), do: {:uuid, github: "okeuday/uuid", tag: "v2.0.6", override: true}
   def common_dep(:redbug), do: {:redbug, github: "emqx/redbug", tag: "2.0.10"}
-  def common_dep(:observer_cli), do: {:observer_cli, "1.7.5"}
+  def common_dep(:observer_cli), do: {:observer_cli, "1.8.2"}
 
   def common_dep(:jose),
     do: {:jose, github: "potatosalad/erlang-jose", tag: "1.11.2", override: true}
@@ -236,7 +241,7 @@ defmodule EMQXUmbrella.MixProject do
   def common_dep(:rulesql), do: {:rulesql, github: "emqx/rulesql", tag: "0.2.1"}
 
   def common_dep(:bcrypt),
-    do: {:bcrypt, github: "emqx/erlang-bcrypt", tag: "0.6.2", override: true}
+    do: {:bcrypt, github: "emqx/erlang-bcrypt", tag: "0.6.3", override: true}
 
   def common_dep(:minirest),
     do: {:minirest, github: "emqx/minirest", tag: "1.4.8", override: true}
@@ -245,24 +250,19 @@ defmodule EMQXUmbrella.MixProject do
   def common_dep(:emqtt),
     do:
       {:emqtt,
-       github: "emqx/emqtt", tag: "1.14.6", override: true, system_env: maybe_no_quic_env()}
+       github: "emqx/emqtt", tag: "1.14.4", override: true, system_env: maybe_no_quic_env()}
 
   def common_dep(:typerefl),
     do: {:typerefl, github: "ieQu1/typerefl", tag: "0.9.6", override: true}
 
-  def common_dep(:erlang_qq),
-    do: {:erlang_qq, github: "k32/erlang_qq", tag: "1.0.0", override: true}
-
   def common_dep(:rocksdb),
-    do: {:rocksdb, github: "emqx/erlang-rocksdb", tag: "1.8.0-emqx-10", override: true}
+    do: {:rocksdb, github: "emqx/erlang-rocksdb", tag: "1.8.0-emqx-8", override: true}
 
   def common_dep(:emqx_http_lib),
     do: {:emqx_http_lib, github: "emqx/emqx_http_lib", tag: "0.5.3", override: true}
 
   def common_dep(:cowlib),
-    do:
-      {:cowlib,
-       github: "ninenines/cowlib", ref: "c6553f8308a2ca5dcd69d845f0a7d098c40c3363", override: true}
+    do: {:cowlib, "2.14.0", override: true}
 
   def common_dep(:snabbkaffe),
     do: {
@@ -276,26 +276,35 @@ defmodule EMQXUmbrella.MixProject do
     }
 
   def common_dep(:ots_erl),
-    do: {:ots_erl, github: "emqx/ots_erl", tag: "0.2.2", override: true}
+    do: {:ots_erl, github: "emqx/ots_erl", tag: "0.2.3", override: true}
 
   def common_dep(:influxdb),
     do: {:influxdb, github: "emqx/influxdb-client-erl", tag: "1.1.13", override: true}
 
-  def common_dep(:wolff), do: {:wolff, "4.0.13"}
+  def common_dep(:wolff), do: {:wolff, "4.0.9"}
   def common_dep(:brod_gssapi), do: {:brod_gssapi, "0.1.3"}
 
   def common_dep(:kafka_protocol),
-    do: {:kafka_protocol, "4.3.1", override: true}
+    do: {:kafka_protocol, "4.2.3", override: true}
 
-  def common_dep(:brod), do: {:brod, "4.5.1"}
+  def common_dep(:brod), do: {:brod, "4.3.1"}
   ## TODO: remove `mix.exs` from `wolff` and remove this override
   ## TODO: remove `mix.exs` from `pulsar` and remove this override
   def common_dep(:snappyer), do: {:snappyer, "1.2.10", override: true}
-  def common_dep(:crc32cer), do: {:crc32cer, "1.1.0", override: true}
+  def common_dep(:crc32cer), do: {:crc32cer, "0.1.12", override: true}
   def common_dep(:jesse), do: {:jesse, github: "emqx/jesse", tag: "1.8.1.1"}
-  def common_dep(:erlavro), do: {:erlavro, github: "emqx/erlavro", tag: "2.10.0", override: true}
 
-  def common_dep(:erlcloud), do: {:erlcloud, github: "emqx/erlcloud", tag: "3.8.3.0"}
+  def common_dep(:erlavro),
+    do: {:erlavro, github: "emqx/erlavro", tag: "2.10.2-emqx-3", override: true}
+
+  def common_dep(:erlcloud), do: {:erlcloud, github: "emqx/erlcloud", tag: "3.7.0.4"}
+
+  # transitive dependency of pulsar-client-erl, and direct dep in s3tables bridge
+  def common_dep(:murmerl3),
+    do: {:murmerl3, github: "emqx/murmerl3", tag: "0.1.0-emqx.1", override: true}
+
+  def common_dep(:brod_oauth),
+    do: {:brod_oauth, "0.1.1"}
 
   def common_dep(:unicode_util_compat),
     do: {:unicode_util_compat, "0.7.1", override: true}
@@ -307,10 +316,10 @@ defmodule EMQXUmbrella.MixProject do
 
   defp emqx_apps(profile_info, version) do
     apps = umbrella_apps(profile_info) ++ enterprise_apps(profile_info)
-    set_emqx_app_system_env(apps, profile_info, version)
+    set_emqx_app_system_env(apps, version)
   end
 
-  defp umbrella_apps(profile_info = %{release_type: release_type}) do
+  defp umbrella_apps(%{release_type: release_type}) do
     enterprise_apps = enterprise_umbrella_apps(release_type)
     excluded_apps = excluded_apps(release_type)
 
@@ -328,15 +337,6 @@ defmodule EMQXUmbrella.MixProject do
       dep_spec
       |> elem(0)
       |> then(&MapSet.member?(enterprise_apps, &1))
-    end)
-    |> Enum.reject(fn {app, _} ->
-      case profile_info do
-        %{edition_type: :enterprise} ->
-          app == :emqx_telemetry
-
-        _ ->
-          false
-      end
     end)
     |> Enum.reject(fn {app, _} -> app == :emqx_mix_utils end)
     |> Enum.reject(fn {app, _} -> app in excluded_apps end)
@@ -390,9 +390,11 @@ defmodule EMQXUmbrella.MixProject do
       :emqx_bridge_azure_blob_storage,
       :emqx_bridge_couchbase,
       :emqx_bridge_snowflake,
+      :emqx_bridge_disk_log,
       :emqx_schema_registry,
       :emqx_schema_validation,
       :emqx_message_transformation,
+      :emqx_ai_completion,
       :emqx_enterprise,
       :emqx_bridge_kinesis,
       :emqx_bridge_azure_event_hub,
@@ -400,12 +402,13 @@ defmodule EMQXUmbrella.MixProject do
       :emqx_dashboard_rbac,
       :emqx_dashboard_sso,
       :emqx_audit,
+      :emqx_mt,
       :emqx_gateway_gbt32960,
       :emqx_gateway_ocpp,
       :emqx_gateway_jt808,
+      :emqx_gateway_nats,
       :emqx_bridge_syskeeper,
       :emqx_ds_shared_sub,
-      :emqx_auth_ext,
       :emqx_cluster_link,
       :emqx_ds_builtin_raft,
       :emqx_auth_kerberos,
@@ -415,20 +418,7 @@ defmodule EMQXUmbrella.MixProject do
     ])
   end
 
-  defp enterprise_umbrella_apps(:platform) do
-    MapSet.union(
-      enterprise_umbrella_apps(:standard),
-      MapSet.new([
-        :emqx_fdb_ds,
-        :emqx_fdb_cli,
-        :emqx_fdb_management,
-        :emqx_event_history,
-        :emqx_ds_fdb_backend
-      ])
-    )
-  end
-
-  defp enterprise_deps(_profile_info = %{edition_type: :enterprise}) do
+  defp data_integration_deps() do
     [
       {:hstreamdb_erl, github: "hstreamdb/hstreamdb_erl", tag: "0.5.27+v0.18.1"},
       common_dep(:influxdb),
@@ -439,31 +429,14 @@ defmodule EMQXUmbrella.MixProject do
       common_dep(:snappyer),
       common_dep(:crc32cer),
       {:opentsdb, github: "emqx/opentsdb-client-erl", tag: "v0.5.1", override: true},
-      {:greptimedb, github: "emqx/greptimedb-ingester-erl", tag: "v0.2.0.1", override: true},
-      # The following two are dependencies of rabbit_common. They are needed here to
-      # make mix not complain about conflicting versions
-      {:thoas, github: "emqx/thoas", tag: "v1.0.0", override: true},
-      {:credentials_obfuscation,
-       github: "emqx/credentials-obfuscation", tag: "v3.2.0", override: true},
-      {:rabbit_common,
-       github: "emqx/rabbitmq-server",
-       tag: "v3.11.13.2",
-       sparse: "deps/rabbit_common",
-       override: true},
-      {:amqp_client,
-       github: "emqx/rabbitmq-server",
-       tag: "v3.11.13.2",
-       sparse: "deps/amqp_client",
-       override: true}
+      {:greptimedb,
+       github: "GreptimeTeam/greptimedb-ingester-erl", tag: "v0.1.8", override: true},
+      {:amqp_client, "4.0.3", override: true}
     ]
   end
 
-  defp enterprise_deps(_profile_info) do
-    []
-  end
-
-  defp set_emqx_app_system_env(apps, profile_info, version) do
-    system_env = emqx_app_system_env(profile_info, version) ++ maybe_no_quic_env()
+  defp set_emqx_app_system_env(apps, version) do
+    system_env = emqx_app_system_env(version) ++ maybe_no_quic_env()
 
     Enum.map(
       apps,
@@ -479,8 +452,8 @@ defmodule EMQXUmbrella.MixProject do
     )
   end
 
-  def emqx_app_system_env(profile_info, version) do
-    erlc_options(profile_info, version)
+  def emqx_app_system_env(version) do
+    erlc_options(version)
     |> dump_as_erl()
     |> then(&[{"ERL_COMPILER_OPTIONS", &1}])
   end
@@ -489,7 +462,7 @@ defmodule EMQXUmbrella.MixProject do
     k = {__MODULE__, :emqx_app_system_env}
 
     get_memoized(k, fn ->
-      emqx_app_system_env(profile_info(), pkg_vsn())
+      emqx_app_system_env(pkg_vsn())
     end)
   end
 
@@ -497,11 +470,12 @@ defmodule EMQXUmbrella.MixProject do
   # END DEPRECATED FOR MIX BLOCK
   ###############################################################################################
 
-  defp erlc_options(%{edition_type: edition_type}, version) do
+  defp erlc_options(version) do
     [
       :debug_info,
       {:compile_info, [{:emqx_vsn, String.to_charlist(version)}]},
-      {:d, :EMQX_RELEASE_EDITION, erlang_edition(edition_type)},
+      # TODO: remove
+      {:d, :EMQX_RELEASE_EDITION, :ee},
       {:d, :EMQX_ELIXIR},
       {:d, :EMQX_FLAVOR, get_emqx_flavor()},
       {:d, :snk_kind, :msg}
@@ -533,7 +507,8 @@ defmodule EMQXUmbrella.MixProject do
       [
         {:bbmustache, "1.10.0"},
         {:cth_readable, "1.5.1"},
-        {:proper, "1.4.0"},
+        # TODO: {:proper, "1.5.0"}, when it's published to hex.pm
+        {:proper, github: "proper-testing/proper", tag: "v1.5.0", override: true},
         {:meck, "0.9.2"}
       ]
     else
@@ -569,9 +544,8 @@ defmodule EMQXUmbrella.MixProject do
     k = {__MODULE__, :erlc_options}
 
     get_memoized(k, fn ->
-      profile_info = profile_info()
       version = pkg_vsn()
-      erlc_options(profile_info, version)
+      erlc_options(version)
     end)
   end
 
@@ -650,6 +624,7 @@ defmodule EMQXUmbrella.MixProject do
             :emqx_dashboard,
             :emqx_dashboard_sso,
             :emqx_audit,
+            :emqx_mt,
             :emqx_resource,
             :emqx_connector,
             :emqx_exhook,
@@ -680,28 +655,18 @@ defmodule EMQXUmbrella.MixProject do
     ]
   end
 
-  def applications(release_type, edition_type) do
+  def applications(_release_type, _edition_type) do
     {:ok,
      [
        %{
          db_apps: db_apps,
          system_apps: system_apps,
          common_business_apps: common_business_apps,
-         ee_business_apps: ee_business_apps,
-         ce_business_apps: ce_business_apps
+         ee_business_apps: ee_business_apps
        }
      ]} = :file.consult("apps/emqx_machine/priv/reboot_lists.eterm")
 
-    edition_specific_apps =
-      if edition_type == :enterprise do
-        ee_business_apps
-      else
-        ce_business_apps
-      end
-
-    business_apps = common_business_apps ++ edition_specific_apps
-
-    excluded_apps = excluded_apps(release_type)
+    business_apps = common_business_apps ++ ee_business_apps
 
     system_apps =
       Enum.map(system_apps, fn app ->
@@ -713,29 +678,9 @@ defmodule EMQXUmbrella.MixProject do
 
     [system_apps, db_apps, [emqx_ctl: :permanent, emqx_machine: :permanent], business_apps]
     |> List.flatten()
-    |> Keyword.reject(fn {app, _type} ->
-      app in excluded_apps ||
-        (edition_type == :enterprise && app == :emqx_telemetry)
-    end)
   end
 
   defp excluded_apps(:standard) do
-    %{
-      mnesia_rocksdb: enable_rocksdb?(),
-      quicer: enable_quicer?(),
-      jq: enable_jq?(),
-      observer: is_app?(:observer),
-      emqx_fdb_ds: false,
-      emqx_fdb_cli: false,
-      emqx_fdb_management: false,
-      emqx_event_history: false,
-      emqx_ds_fdb_backend: false
-    }
-    |> Enum.reject(&elem(&1, 1))
-    |> Enum.map(&elem(&1, 0))
-  end
-
-  defp excluded_apps(:platform) do
     %{
       mnesia_rocksdb: enable_rocksdb?(),
       quicer: enable_quicer?(),
@@ -761,9 +706,6 @@ defmodule EMQXUmbrella.MixProject do
 
   def check_profile!() do
     valid_envs = [
-      :emqx,
-      :"emqx-test",
-      :"emqx-pkg",
       :"emqx-enterprise",
       :"emqx-enterprise-test",
       :"emqx-enterprise-pkg"
@@ -778,12 +720,7 @@ defmodule EMQXUmbrella.MixProject do
         |> String.to_atom()
         |> Mix.env()
       else
-        Mix.shell().info([
-          :yellow,
-          "Warning: env var PROFILE is unset; defaulting to emqx"
-        ])
-
-        Mix.env(:emqx)
+        Mix.env(:"emqx-enterprise")
       end
     end
 
@@ -808,22 +745,13 @@ defmodule EMQXUmbrella.MixProject do
     } =
       case mix_env do
         :dev ->
-          {:standard, :bin, :community}
-
-        :emqx ->
-          {:standard, :bin, :community}
-
-        :"emqx-test" ->
-          {:standard, :bin, :community}
+          {:standard, :bin, :enterprise}
 
         :"emqx-enterprise" ->
           {:standard, :bin, :enterprise}
 
         :"emqx-enterprise-test" ->
           {:standard, :bin, :enterprise}
-
-        :"emqx-pkg" ->
-          {:standard, :pkg, :community}
 
         :"emqx-enterprise-pkg" ->
           {:standard, :pkg, :enterprise}
@@ -921,26 +849,11 @@ defmodule EMQXUmbrella.MixProject do
       Path.join(etc, "certs")
     )
 
-    profile = System.get_env("MIX_ENV")
-
     File.cp_r!(
       "rel/config/examples",
       Path.join(etc, "examples"),
       force: overwrite?
     )
-
-    # copy /rel/config/ee-examples if profile is enterprise
-    case profile do
-      "emqx-enterprise" ->
-        File.cp_r!(
-          "rel/config/ee-examples",
-          Path.join(etc, "examples"),
-          force: overwrite?
-        )
-
-      _ ->
-        :ok
-    end
 
     # this is required by the produced escript / nodetool
     Mix.Generator.copy_file(
@@ -954,6 +867,12 @@ defmodule EMQXUmbrella.MixProject do
     # This is generated by `scripts/merge-config.escript` or `make merge-config`
     # So, this should be run before the release.
     # TODO: run as a "compiler" step???
+    render_template(
+      "apps/emqx/etc/ssl_dist.conf",
+      assigns,
+      Path.join(etc, "ssl_dist.conf")
+    )
+
     render_template(
       "apps/emqx_conf/etc/emqx.conf.all",
       assigns,
@@ -1204,9 +1123,6 @@ defmodule EMQXUmbrella.MixProject do
           flavor ->
             "EMQX Enterprise(#{flavor})"
         end
-
-      {_, :community} ->
-        "EMQX"
     end
   end
 
@@ -1216,18 +1132,11 @@ defmodule EMQXUmbrella.MixProject do
   defp emqx_configuration_doc(:enterprise, :log),
     do: "https://docs.emqx.com/en/enterprise/latest/configuration/logs.html"
 
-  defp emqx_configuration_doc(:community, :root),
-    do: "https://www.emqx.io/docs/en/latest/configuration/configuration.html"
-
-  defp emqx_configuration_doc(:community, :log),
-    do: "https://www.emqx.io/docs/en/latest/configuration/logs.html"
-
   defp emqx_schema_mod(:enterprise), do: :emqx_enterprise_schema
-  defp emqx_schema_mod(:community), do: :emqx_conf_schema
 
   def jq_dep() do
     if enable_jq?(),
-      do: [{:jq, github: "emqx/jq", tag: "v0.3.14", override: true}],
+      do: [{:jq, github: "emqx/jq", tag: "v0.3.12", override: true}],
       else: []
   end
 
@@ -1235,7 +1144,7 @@ defmodule EMQXUmbrella.MixProject do
     if enable_quicer?(),
       # in conflict with emqx and emqtt
       do: [
-        {:quicer, github: "emqx/quic", tag: "0.1.11", override: true}
+        {:quicer, github: "emqx/quic", tag: "0.2.5", override: true}
       ],
       else: []
   end
@@ -1339,7 +1248,7 @@ defmodule EMQXUmbrella.MixProject do
     env =
       case Mix.env() do
         :dev ->
-          :emqx
+          :"emqx-enterprise"
 
         env ->
           env
@@ -1382,12 +1291,10 @@ defmodule EMQXUmbrella.MixProject do
     |> :erlang.iolist_to_binary()
   end
 
-  defp erlang_edition(:community), do: :ce
-  defp erlang_edition(:enterprise), do: :ee
-
   defp aliases() do
     [
       ct: &do_ct/1,
+      cover: &do_cover/1,
       eunit: &do_eunit/1,
       proper: &do_proper/1,
       dialyzer: &do_dialyzer/1
@@ -1402,6 +1309,12 @@ defmodule EMQXUmbrella.MixProject do
     set_test_env!(true)
 
     Mix.Task.run("emqx.ct", args)
+  end
+
+  defp do_cover(args) do
+    ensure_test_mix_env!()
+    set_test_env!(true)
+    Mix.Task.run("emqx.cover", args)
   end
 
   defp do_eunit(args) do
