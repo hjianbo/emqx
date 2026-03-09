@@ -190,7 +190,7 @@ lookup_pending_session_key(KeyID) ->
 cleanup_expired_pending_keys(Now) ->
     MatchSpec = [
         {
-            #login_pending_key{key = '$1', session_key = '_', expire_at = '$2'},
+            {login_pending_key, '$1', '_', '$2'},
             [{'=<', '$2', Now}],
             ['$1']
         }
