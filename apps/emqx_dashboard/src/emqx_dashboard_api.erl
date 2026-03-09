@@ -21,6 +21,7 @@
 
 -export([
     login/2,
+    login_key_agreement/2,
     logout/2,
     users/2,
     user/2,
@@ -46,6 +47,7 @@ api_spec() ->
 
 paths() ->
     [
+        "/login/key_agreement",
         "/login",
         "/logout",
         "/users",
@@ -62,12 +64,29 @@ schema("/login") ->
             tags => [<<"dashboard">>],
             desc => ?DESC(login_api),
             summary => <<"Dashboard authentication">>,
-            'requestBody' => fields([username, password, mfa_token]),
+            'requestBody' => login_request_body(),
             responses => #{
                 200 => fields([
                     role, token, version, license, password_expire_in_seconds
                 ]),
                 401 => emqx_dashboard_swagger:error_codes(ErrorCodes, ?DESC(login_failed401))
+            },
+            security => []
+        }
+    };
+schema("/login/key_agreement") ->
+    #{
+        'operationId' => login_key_agreement,
+        post => #{
+            tags => [<<"dashboard">>],
+            desc => <<"Negotiate dashboard encrypted login AES key">>,
+            summary => <<"Dashboard login key agreement">>,
+            'requestBody' => fields([enc_mode, encrypted_key]),
+            responses => #{
+                200 => fields([key_id]),
+                400 => emqx_dashboard_swagger:error_codes(
+                    [?BAD_REQUEST], ?DESC(login_failed_response400)
+                )
             },
             security => []
         }
@@ -184,6 +203,49 @@ response_schema(401) ->
 response_schema(404) ->
     emqx_dashboard_swagger:error_codes([?USER_NOT_FOUND], ?DESC(users_api404)).
 
+login_request_body() ->
+    #{
+        content => #{
+            <<"application/json">> => #{
+                schema => #{
+                    oneOf => [
+                        login_plain_request_schema(),
+                        login_ciphertext_request_schema()
+                    ]
+                }
+            },
+            <<"text/plain">> => #{
+                schema => login_ciphertext_request_schema()
+            }
+        }
+    }.
+
+login_plain_request_schema() ->
+    #{
+        type => object,
+        properties => #{
+            <<"username">> => #{
+                type => string,
+                example => <<"admin">>
+            },
+            <<"password">> => #{
+                type => string,
+                example => <<"public">>
+            },
+            <<"mfa_token">> => #{
+                type => string,
+                example => <<"023123">>
+            }
+        },
+        required => [<<"username">>, <<"password">>]
+    }.
+
+login_ciphertext_request_schema() ->
+    #{
+        type => string,
+        description => <<"Encrypted login payload base64 string">>
+    }.
+
 fields(user) ->
     user_fields();
 fields(List) ->
@@ -248,31 +310,84 @@ field(backend) ->
     {backend, mk(binary(), #{desc => ?DESC(backend), example => <<"local">>})};
 field(password_expire_in_seconds) ->
     {password_expire_in_seconds,
-        mk(integer(), #{desc => ?DESC(password_expire_in_seconds), example => 3600})}.
+        mk(integer(), #{desc => ?DESC(password_expire_in_seconds), example => 3600})};
+field(key_id) ->
+    {key_id,
+        mk(binary(), #{
+            desc => <<"Key ID returned by /login/key_agreement">>,
+            required => true
+        })};
+field(enc_mode) ->
+    {enc_mode,
+        mk(binary(), #{
+            desc => <<"Encrypted login mode">>,
+            example => <<"rsa_oaep_sha256_aes_256_gcm_v1">>,
+            required => false
+        })};
+field(encrypted_key) ->
+    {encrypted_key,
+        mk(
+            binary(),
+            #{
+                desc => <<"RSA encrypted AES session key (Base64)">>,
+                required => false
+            }
+        )}.
 
 %% -------------------------------------------------------------------------------------------------
 %% API
 
-login(post, #{body := Params}) ->
-    Username = maps:get(<<"username">>, Params),
-    Password = maps:get(<<"password">>, Params),
-    MfaToken = maps:get(<<"mfa_token">>, Params, ?NO_MFA_TOKEN),
-    minirest_handler:update_log_meta(#{log_from => dashboard, log_source => Username}),
-    case emqx_dashboard_admin:sign_token(Username, Password, MfaToken) of
-        {ok, Result} ->
-            ?SLOG(info, #{msg => "dashboard_login_successful", username => Username}),
-            ok = emqx_dashboard_login_lock:reset(Username),
-            Version = iolist_to_binary(proplists:get_value(version, emqx_sys:info())),
-            {200,
-                filter_result(Result#{
-                    version => Version,
-                    license => #{edition => emqx_release:edition()}
-                })};
-        {error, R} ->
-            ok = register_unsuccessful_login(Username, R),
-            ?SLOG(info, #{msg => "dashboard_login_failed", username => Username, reason => R}),
-            format_login_failed_error(R)
+login(post, #{body := Params0} = Req) ->
+    Headers = maps:get(headers, Req, #{}),
+    case emqx_dashboard_login_crypto:normalize_login_params(Params0, Headers) of
+        {ok, Params, CryptoCtx} ->
+            Username = maps:get(<<"username">>, Params),
+            Password = maps:get(<<"password">>, Params),
+            MfaToken = maps:get(<<"mfa_token">>, Params, ?NO_MFA_TOKEN),
+            minirest_handler:update_log_meta(#{log_from => dashboard, log_source => Username}),
+            case emqx_dashboard_admin:sign_token(Username, Password, MfaToken) of
+                {ok, Result} ->
+                    ok = maybe_cache_login_crypto_ctx(Result, CryptoCtx),
+                    ?SLOG(info, #{msg => "dashboard_login_successful", username => Username}),
+                    ok = emqx_dashboard_login_lock:reset(Username),
+                    Version = iolist_to_binary(proplists:get_value(version, emqx_sys:info())),
+                    {200,
+                        filter_result(Result#{
+                            version => Version,
+                            license => #{edition => emqx_release:edition()}
+                        })};
+                {error, R} ->
+                    ok = register_unsuccessful_login(Username, R),
+                    ?SLOG(info, #{
+                        msg => "dashboard_login_failed", username => Username, reason => R
+                    }),
+                    format_login_failed_error(R)
+            end;
+        {error, ErrorTuple} ->
+            ErrorTuple
     end.
+
+login_key_agreement(post, #{body := Params}) ->
+    case emqx_dashboard_login_crypto:negotiate_session_key(Params) of
+        {ok, Result} ->
+            {200, Result};
+        {error, ErrorTuple} ->
+            ErrorTuple
+    end.
+
+maybe_cache_login_crypto_ctx(
+    #{token := Token},
+    #{encrypted := true, session_key := SessionKey}
+) ->
+    case emqx_dashboard_token:set_extra(Token, #{login_aes_key => SessionKey}) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            ?SLOG(error, #{msg => "dashboard_login_cache_session_key_failed", reason => Reason}),
+            ok
+    end;
+maybe_cache_login_crypto_ctx(_Result, _CryptoCtx) ->
+    ok.
 
 format_login_failed_error(Reason) ->
     maybe

@@ -133,11 +133,18 @@ remove_sensitive_data(Conf0) ->
             _ ->
                 Conf0
         end,
-    case Conf1 of
-        #{<<"listeners">> := #{<<"https">> := #{<<"password">> := ?SENSITIVE_PASSWORD}}} ->
-            emqx_utils_maps:deep_remove([<<"listeners">>, <<"https">>, <<"password">>], Conf1);
+    Conf2 =
+        case Conf1 of
+            #{<<"listeners">> := #{<<"https">> := #{<<"password">> := ?SENSITIVE_PASSWORD}}} ->
+                emqx_utils_maps:deep_remove([<<"listeners">>, <<"https">>, <<"password">>], Conf1);
+            _ ->
+                Conf1
+        end,
+    case Conf2 of
+        #{<<"login_encryption">> := #{<<"private_key">> := ?SENSITIVE_PASSWORD}} ->
+            emqx_utils_maps:deep_remove([<<"login_encryption">>, <<"private_key">>], Conf2);
         _ ->
-            Conf1
+            Conf2
     end.
 
 get_listener(Type, Conf) ->

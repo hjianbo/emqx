@@ -67,6 +67,13 @@ fields("dashboard") ->
                     desc => ?DESC(password_expired_time)
                 }
             )},
+        {login_encryption,
+            ?HOCON(
+                ?R_REF("login_encryption"),
+                #{
+                    desc => <<"Dashboard login encryption settings">>
+                }
+            )},
         {cors, fun cors/1},
         {swagger_support, fun swagger_support/1},
         {i18n_lang, fun i18n_lang/1},
@@ -147,6 +154,37 @@ fields("https") ->
     ];
 fields("ssl_options") ->
     server_ssl_options();
+fields("login_encryption") ->
+    [
+        {"enable",
+            ?HOCON(
+                boolean(),
+                #{
+                    default => false,
+                    desc => <<"Enable encrypted HTTP body for dashboard /login">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )},
+        {"require_encrypted_body",
+            ?HOCON(
+                boolean(),
+                #{
+                    default => false,
+                    desc => <<"Require encrypted HTTP body for dashboard /login">>,
+                    importance => ?IMPORTANCE_MEDIUM
+                }
+            )},
+        {"private_key",
+            ?HOCON(
+                emqx_schema_secret:secret(),
+                #{
+                    default => <<>>,
+                    sensitive => true,
+                    desc => <<"RSA private key PEM text or path">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )}
+    ];
 fields("mfa_settings") ->
     mfa_fields().
 
@@ -281,6 +319,8 @@ desc("https") ->
     ?DESC(desc_https);
 desc("ssl_options") ->
     ?DESC(ssl_options);
+desc("login_encryption") ->
+    <<"Dashboard login encryption settings">>;
 desc("mfa_settings") ->
     ?DESC(mfa_settings);
 desc(_) ->
