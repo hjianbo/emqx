@@ -273,11 +273,17 @@ decrypt_aes_key(EncryptedKey, PrivateKey) ->
 
 decrypt_payload(AesKey, IV, Ciphertext, Tag) ->
     try
-        {ok, crypto:crypto_one_time_aead(aes_256_gcm, AesKey, IV, Ciphertext, <<>>, Tag, false)}
+        {ok,
+            crypto:crypto_one_time_aead(
+                cipher_aesgcm256(), AesKey, IV, Ciphertext, <<>>, Tag, false
+            )}
     catch
         _:_ ->
             {error, <<"Failed to decrypt login payload">>}
     end.
+
+cipher_aesgcm256() ->
+    erlang:binary_to_atom(<<"aes_256_gcm">>, utf8).
 
 decode_login_payload(Payload) ->
     maybe
