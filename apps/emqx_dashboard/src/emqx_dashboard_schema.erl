@@ -156,22 +156,13 @@ fields("ssl_options") ->
     server_ssl_options();
 fields("login_encryption") ->
     [
-        {"enable",
+        {"mode",
             ?HOCON(
-                boolean(),
+                hoconsc:enum([disabled, optional, required]),
                 #{
-                    default => false,
-                    desc => <<"Enable encrypted HTTP body for dashboard /login">>,
+                    default => disabled,
+                    desc => <<"Dashboard /login body encryption mode">>,
                     importance => ?IMPORTANCE_HIGH
-                }
-            )},
-        {"require_encrypted_body",
-            ?HOCON(
-                boolean(),
-                #{
-                    default => false,
-                    desc => <<"Require encrypted HTTP body for dashboard /login">>,
-                    importance => ?IMPORTANCE_MEDIUM
                 }
             )},
         {"private_key",

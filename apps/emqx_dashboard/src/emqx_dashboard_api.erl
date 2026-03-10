@@ -21,7 +21,7 @@
 
 -export([
     login/2,
-    login_key_agreement/2,
+    login_key/2,
     logout/2,
     users/2,
     user/2,
@@ -47,7 +47,7 @@ api_spec() ->
 
 paths() ->
     [
-        "/login/key_agreement",
+        "/login/key",
         "/login",
         "/logout",
         "/users",
@@ -74,14 +74,14 @@ schema("/login") ->
             security => []
         }
     };
-schema("/login/key_agreement") ->
+schema("/login/key") ->
     #{
-        'operationId' => login_key_agreement,
+        'operationId' => login_key,
         post => #{
             tags => [<<"dashboard">>],
             desc => <<"Negotiate dashboard encrypted login AES key">>,
-            summary => <<"Dashboard login key agreement">>,
-            'requestBody' => fields([enc_mode, encrypted_key]),
+            summary => <<"Dashboard login key">>,
+            'requestBody' => fields([encrypted_key]),
             responses => #{
                 200 => fields([key_id]),
                 400 => emqx_dashboard_swagger:error_codes(
@@ -314,15 +314,8 @@ field(password_expire_in_seconds) ->
 field(key_id) ->
     {key_id,
         mk(binary(), #{
-            desc => <<"Key ID returned by /login/key_agreement">>,
+            desc => <<"Key ID returned by /login/key">>,
             required => true
-        })};
-field(enc_mode) ->
-    {enc_mode,
-        mk(binary(), #{
-            desc => <<"Encrypted login mode">>,
-            example => <<"rsa_oaep_sha256_aes_256_gcm_v1">>,
-            required => false
         })};
 field(encrypted_key) ->
     {encrypted_key,
@@ -367,7 +360,7 @@ login(post, #{body := Params0} = Req) ->
             ErrorTuple
     end.
 
-login_key_agreement(post, #{body := Params}) ->
+login_key(post, #{body := Params}) ->
     case emqx_dashboard_login_crypto:negotiate_session_key(Params) of
         {ok, Result} ->
             {200, Result};

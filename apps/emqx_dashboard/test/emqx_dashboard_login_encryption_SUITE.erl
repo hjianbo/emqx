@@ -49,7 +49,7 @@ init_per_testcase(_TestCase, Config) ->
         ?USERNAME, ?PASSWORD, ?ROLE_SUPERUSER, <<"simple_description">>
     ),
     {PublicKey, PrivateKeyPem} = gen_rsa_keypair(),
-    ok = set_login_encryption(true, true, PrivateKeyPem),
+    ok = set_login_encryption(required, PrivateKeyPem),
     [
         {public_key, PublicKey},
         {private_key_pem, PrivateKeyPem}
@@ -57,7 +57,7 @@ init_per_testcase(_TestCase, Config) ->
     ].
 
 end_per_testcase(_TestCase, Config) ->
-    ok = set_login_encryption(false, false, <<>>),
+    ok = set_login_encryption(disabled, <<>>),
     mnesia:clear_table(?ADMIN_JWT),
     mnesia:clear_table(?PENDING_KEY_TAB),
     Config.
@@ -72,7 +72,7 @@ t_encrypted_login_success(Config) ->
     ).
 
 t_plain_login_works_when_optional(_) ->
-    ok = set_login_encryption(true, false, <<>>),
+    ok = set_login_encryption(optional, <<>>),
     ?assertMatch(
         {ok, #{<<"token">> := _}},
         api_post([login], #{username => ?USERNAME, password => ?PASSWORD})
@@ -80,7 +80,7 @@ t_plain_login_works_when_optional(_) ->
 
 t_plain_login_rejected_when_required(Config) ->
     PrivateKeyPem = ?config(private_key_pem, Config),
-    ok = set_login_encryption(true, true, PrivateKeyPem),
+    ok = set_login_encryption(required, PrivateKeyPem),
     ?assertMatch(
         {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
         api_post([login], #{username => ?USERNAME, password => ?PASSWORD})
@@ -101,11 +101,11 @@ t_json_ciphertext_wrapper_rejected_when_required(Config) ->
 
 t_key_agreement_rejected_when_not_required(Config) ->
     PublicKey = ?config(public_key, Config),
-    ok = set_login_encryption(true, false, <<>>),
+    ok = set_login_encryption(optional, <<>>),
     Body = key_agreement_body(PublicKey, crypto:strong_rand_bytes(32)),
     ?assertMatch(
         {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
-        api_post([login, key_agreement], Body)
+        api_post([login, key], Body)
     ).
 
 t_encrypted_login_bad_ciphertext(Config) ->
@@ -132,10 +132,9 @@ t_login_stores_aes_session_key_in_token_extra(Config) ->
 %% Helpers
 %%--------------------------------------------------------------------
 
-set_login_encryption(Enable, RequireEncryptedBody, PrivateKeyPem) ->
+set_login_encryption(Mode, PrivateKeyPem) ->
     emqx_config:put([dashboard, login_encryption], #{
-        enable => Enable,
-        require_encrypted_body => RequireEncryptedBody,
+        mode => Mode,
         private_key => PrivateKeyPem
     }).
 
@@ -152,7 +151,7 @@ gen_rsa_keypair() ->
 negotiate_key(PublicKey) ->
     AesKey = crypto:strong_rand_bytes(32),
     Body = key_agreement_body(PublicKey, AesKey),
-    {ok, #{<<"key_id">> := KeyID}} = api_post([login, key_agreement], Body),
+    {ok, #{<<"key_id">> := KeyID}} = api_post([login, key], Body),
     {KeyID, AesKey}.
 
 key_agreement_body(PublicKey, AesKey) ->
@@ -161,10 +160,7 @@ key_agreement_body(PublicKey, AesKey) ->
         {rsa_oaep_md, sha256},
         {rsa_mgf1_md, sha256}
     ]),
-    #{
-        <<"enc_mode">> => <<"rsa_oaep_sha256_aes_256_gcm_v1">>,
-        <<"encrypted_key">> => base64:encode(EncryptedKey)
-    }.
+    #{<<"encrypted_key">> => base64:encode(EncryptedKey)}.
 
 encrypted_login_body(Username, Password, AesKey) ->
     IV = crypto:strong_rand_bytes(12),

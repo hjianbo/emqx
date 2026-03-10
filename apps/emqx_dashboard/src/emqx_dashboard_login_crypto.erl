@@ -15,7 +15,6 @@
 ]).
 
 -define(BAD_REQUEST, 'BAD_REQUEST').
--define(ENCRYPTED_MODE, <<"rsa_oaep_sha256_aes_256_gcm_v1">>).
 -define(PENDING_KEY_TAB, emqx_dashboard_login_pending_keys).
 -define(PENDING_KEY_TTL_MS, 5 * 60 * 1000).
 
@@ -40,12 +39,9 @@ create_tables() ->
     {ok, map()} | {error, {non_neg_integer(), atom(), binary()}}.
 negotiate_session_key(Params) when is_map(Params) ->
     Conf = login_encryption_config(),
-    Enable = maps:get(enable, Conf),
-    RequireEncryptedBody = maps:get(require_encrypted_body, Conf),
-    case Enable andalso RequireEncryptedBody of
-        false ->
-            bad_request(<<"Login key agreement is only available in required encrypted mode">>);
-        true ->
+    Mode = maps:get(mode, Conf),
+    case Mode of
+        required ->
             maybe
                 {ok, AesKey} ?= decrypt_negotiated_session_key(Params, Conf),
                 {ok, KeyID} ?= cache_pending_session_key(AesKey),
@@ -53,19 +49,18 @@ negotiate_session_key(Params) when is_map(Params) ->
             else
                 {error, Msg} ->
                     bad_request(Msg)
-            end
+            end;
+        _ ->
+            bad_request(<<"Login key API is only available when mode=required">>)
     end.
 
 -spec normalize_login_params(term(), map()) ->
     {ok, map(), map()} | {error, {non_neg_integer(), atom(), binary()}}.
 normalize_login_params(Body, Headers) when is_map(Headers) ->
     Conf = login_encryption_config(),
-    Enable = maps:get(enable, Conf),
-    RequireEncryptedBody = maps:get(require_encrypted_body, Conf),
-    case RequireEncryptedBody of
-        true when not Enable ->
-            bad_request(<<"Encrypted login is disabled">>);
-        true ->
+    Mode = maps:get(mode, Conf),
+    case Mode of
+        required ->
             maybe
                 {ok, CiphertextB64} ?= parse_encrypted_login_body(Body),
                 {ok, KeyID} ?= fetch_key_id(Headers),
@@ -78,7 +73,7 @@ normalize_login_params(Body, Headers) when is_map(Headers) ->
                 {error, Msg} ->
                     bad_request(Msg)
             end;
-        false ->
+        _ ->
             maybe
                 {ok, LoginParams} ?= parse_plain_login_params(Body),
                 {ok, LoginParams, #{encrypted => false}}
@@ -93,21 +88,42 @@ login_encryption_config() ->
     Conf0 = maybe_to_map(Raw),
     Conf = normalize_keys(Conf0),
     #{
-        enable => maps:get(enable, Conf, false),
-        require_encrypted_body => maps:get(require_encrypted_body, Conf, false),
+        mode => maps:get(mode, Conf, disabled),
         private_key => emqx_secret:unwrap(maps:get(private_key, Conf, <<>>))
     }.
 
 normalize_keys(Conf) ->
+    Mode0 = get_with_keys(Conf, [mode, <<"mode">>], undefined),
+    Mode =
+        case Mode0 of
+            undefined -> mode_from_legacy(Conf);
+            _ -> normalize_mode(Mode0)
+        end,
     #{
-        enable => get_with_keys(Conf, [enable, <<"enable">>], false),
-        require_encrypted_body => get_with_keys(
-            Conf,
-            [require_encrypted_body, <<"require_encrypted_body">>],
-            false
-        ),
+        mode => Mode,
         private_key => get_with_keys(Conf, [private_key, <<"private_key">>], <<>>)
     }.
+
+mode_from_legacy(Conf) ->
+    Enable = get_with_keys(Conf, [enable, <<"enable">>], false),
+    RequireEncryptedBody = get_with_keys(
+        Conf,
+        [require_encrypted_body, <<"require_encrypted_body">>],
+        false
+    ),
+    case {Enable, RequireEncryptedBody} of
+        {true, true} -> required;
+        {true, false} -> optional;
+        _ -> disabled
+    end.
+
+normalize_mode(required) -> required;
+normalize_mode(optional) -> optional;
+normalize_mode(disabled) -> disabled;
+normalize_mode(<<"required">>) -> required;
+normalize_mode(<<"optional">>) -> optional;
+normalize_mode(<<"disabled">>) -> disabled;
+normalize_mode(_) -> disabled.
 
 get_with_keys(Map, [Key | Rest], Default) ->
     case maps:find(Key, Map) of
@@ -124,15 +140,12 @@ maybe_to_map(_) ->
 
 decrypt_negotiated_session_key(Params, Conf) ->
     maybe
-        {ok, ?ENCRYPTED_MODE} ?= fetch_enc_mode(Params),
         {ok, EncryptedKeyB64} ?= fetch_binary(Params, [<<"encrypted_key">>, encrypted_key]),
         {ok, EncryptedKey} ?= decode_base64(EncryptedKeyB64),
         {ok, PrivateKey} ?= load_private_key(maps:get(private_key, Conf, <<>>)),
         {ok, AesKey} ?= decrypt_aes_key(EncryptedKey, PrivateKey),
         {ok, AesKey}
     else
-        {ok, _BadMode} ->
-            {error, <<"Unsupported encrypted login mode">>};
         {error, _} = Error ->
             Error
     end.
@@ -207,18 +220,6 @@ fetch_binary(Map, [Key | Rest]) ->
     end;
 fetch_binary(_Map, []) ->
     {error, <<"Missing encrypted login field">>}.
-
-fetch_enc_mode(Params) ->
-    case find_first(Params, [<<"enc_mode">>, enc_mode]) of
-        {ok, Value} when is_binary(Value) ->
-            {ok, Value};
-        {ok, Value} when is_atom(Value) ->
-            {ok, atom_to_binary(Value, utf8)};
-        {ok, _} ->
-            {error, <<"Invalid encrypted login field type">>};
-        error ->
-            {error, <<"Missing encrypted login field">>}
-    end.
 
 decode_base64(Value) ->
     try
