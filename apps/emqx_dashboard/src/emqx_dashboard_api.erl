@@ -207,12 +207,7 @@ login_request_body() ->
     #{
         content => #{
             <<"application/json">> => #{
-                schema => #{
-                    <<"oneOf">> => [
-                        login_plain_request_schema(),
-                        login_ciphertext_request_schema()
-                    ]
-                }
+                schema => login_plain_request_schema()
             },
             <<"text/plain">> => #{
                 schema => login_ciphertext_request_schema()
