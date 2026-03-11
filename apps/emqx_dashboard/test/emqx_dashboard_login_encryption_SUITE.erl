@@ -66,9 +66,12 @@ t_encrypted_login_success(Config) ->
     PublicKey = ?config(public_key, Config),
     {KeyID, SessionKey} = negotiate_key(PublicKey),
     CiphertextB64 = encrypted_login_body(?USERNAME, ?PASSWORD, SessionKey),
+    {ok, EncryptedResponseB64} =
+        api_post_raw_base64([login], CiphertextB64, [login_key_header(KeyID)]),
+    ?assert(is_binary(EncryptedResponseB64)),
     ?assertMatch(
         {ok, #{<<"token">> := _}},
-        api_post_raw_base64([login], CiphertextB64, [login_key_header(KeyID)])
+        decrypt_login_response(EncryptedResponseB64, SessionKey)
     ).
 
 t_plain_login_works_when_optional(_) ->
@@ -122,9 +125,10 @@ t_login_stores_aes_session_key_in_token_extra(Config) ->
     PublicKey = ?config(public_key, Config),
     {KeyID, SessionKey} = negotiate_key(PublicKey),
     CiphertextB64 = encrypted_login_body(?USERNAME, ?PASSWORD, SessionKey),
-    {ok, #{<<"token">> := Token}} = api_post_raw_base64(
+    {ok, EncryptedResponseB64} = api_post_raw_base64(
         [login], CiphertextB64, [login_key_header(KeyID)]
     ),
+    {ok, #{<<"token">> := Token}} = decrypt_login_response(EncryptedResponseB64, SessionKey),
     {ok, #?ADMIN_JWT{extra = Extra}} = emqx_dashboard_token:lookup(Token),
     ?assertEqual(SessionKey, maps:get(login_aes_key, Extra)).
 
@@ -175,6 +179,26 @@ encrypted_login_body(Username, Password, AesKey) ->
     ),
     Blob = <<IV/binary, Tag/binary, CipherText/binary>>,
     base64:encode(Blob).
+
+decrypt_login_response(ResponseCiphertextB64, AesKey) ->
+    try
+        Blob = base64:decode(ResponseCiphertextB64),
+        true = byte_size(Blob) > 28,
+        <<IV:12/binary, Tag:16/binary, CipherText/binary>> = Blob,
+        PlainPayload = crypto:crypto_one_time_aead(
+            aes_256_gcm,
+            AesKey,
+            IV,
+            CipherText,
+            <<>>,
+            Tag,
+            false
+        ),
+        emqx_utils_json:safe_decode(PlainPayload)
+    catch
+        _:_ ->
+            {error, bad_login_response_ciphertext}
+    end.
 
 api_post(Path, Data) ->
     api_post(Path, Data, []).

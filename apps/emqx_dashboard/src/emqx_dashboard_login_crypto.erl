@@ -11,7 +11,8 @@
 -export([
     create_tables/0,
     negotiate_session_key/1,
-    normalize_login_params/2
+    normalize_login_params/2,
+    encrypt_login_response/2
 ]).
 
 -define(BAD_REQUEST, 'BAD_REQUEST').
@@ -81,6 +82,26 @@ normalize_login_params(Body, Headers) when is_map(Headers) ->
                 {error, Msg} ->
                     bad_request(Msg)
             end
+    end.
+
+-spec encrypt_login_response(map(), binary()) -> {ok, binary()} | {error, binary()}.
+encrypt_login_response(Response, SessionKey) when is_map(Response), is_binary(SessionKey) ->
+    try
+        IV = crypto:strong_rand_bytes(12),
+        PlainPayload = emqx_utils_json:encode(Response),
+        {Ciphertext, Tag} = crypto:crypto_one_time_aead(
+            cipher_aesgcm256(),
+            SessionKey,
+            IV,
+            PlainPayload,
+            <<>>,
+            true
+        ),
+        Blob = <<IV/binary, Tag/binary, Ciphertext/binary>>,
+        {ok, base64:encode(Blob)}
+    catch
+        _:_ ->
+            {error, <<"Failed to encrypt login response">>}
     end.
 
 login_encryption_config() ->

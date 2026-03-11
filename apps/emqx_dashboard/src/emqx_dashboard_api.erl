@@ -339,11 +339,11 @@ login(post, #{body := Params0} = Req) ->
                     ?SLOG(info, #{msg => "dashboard_login_successful", username => Username}),
                     ok = emqx_dashboard_login_lock:reset(Username),
                     Version = iolist_to_binary(proplists:get_value(version, emqx_sys:info())),
-                    {200,
-                        filter_result(Result#{
-                            version => Version,
-                            license => #{edition => emqx_release:edition()}
-                        })};
+                    LoginResult = filter_result(Result#{
+                        version => Version,
+                        license => #{edition => emqx_release:edition()}
+                    }),
+                    format_login_success_response(LoginResult, CryptoCtx);
                 {error, R} ->
                     ok = register_unsuccessful_login(Username, R),
                     ?SLOG(info, #{
@@ -376,6 +376,20 @@ maybe_cache_login_crypto_ctx(
     end;
 maybe_cache_login_crypto_ctx(_Result, _CryptoCtx) ->
     ok.
+
+format_login_success_response(
+    LoginResult,
+    #{encrypted := true, session_key := SessionKey}
+) ->
+    case emqx_dashboard_login_crypto:encrypt_login_response(LoginResult, SessionKey) of
+        {ok, EncryptedResponse} ->
+            {200, #{<<"content-type">> => <<"text/plain">>}, EncryptedResponse};
+        {error, Reason} ->
+            ?SLOG(error, #{msg => "dashboard_encrypt_login_response_failed", reason => Reason}),
+            {500, 'INTERNAL_ERROR', <<"Failed to encrypt login response">>}
+    end;
+format_login_success_response(LoginResult, _CryptoCtx) ->
+    {200, LoginResult}.
 
 format_login_failed_error(Reason) ->
     maybe
