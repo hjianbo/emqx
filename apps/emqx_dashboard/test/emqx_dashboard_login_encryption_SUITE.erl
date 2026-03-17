@@ -130,6 +130,24 @@ t_get_public_key_rejected_when_not_required(_) ->
         api_get([login, public_key])
     ).
 
+t_public_key_api_not_in_swagger(_) ->
+    {ok, {{"HTTP/1.1", 200, "OK"}, _Headers, Body}} =
+        httpc:request(
+            get,
+            {"http://127.0.0.1:18083/api-docs/swagger.json", []},
+            [],
+            [{body_format, binary}]
+        ),
+    {ok, Swagger} = emqx_utils_json:safe_decode(Body),
+    PathMap = maps:get(<<"paths">>, Swagger, #{}),
+    HasPublicKeyPath = lists:any(
+        fun(Path) ->
+            binary:match(iolist_to_binary(Path), <<"/login/public_key">>) =/= nomatch
+        end,
+        maps:keys(PathMap)
+    ),
+    ?assertEqual(false, HasPublicKeyPath).
+
 t_encrypted_login_bad_ciphertext(Config) ->
     PublicKey = ?config(public_key, Config),
     {KeyID, SessionKey} = negotiate_key(PublicKey),
