@@ -111,6 +111,25 @@ t_key_agreement_rejected_when_not_required(Config) ->
         api_post([login, key], Body)
     ).
 
+t_get_public_key_success(Config) ->
+    PublicKey = ?config(public_key, Config),
+    {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
+    ?assertEqual(public_key_to_pem(PublicKey), PublicKeyPem).
+
+t_get_public_key_prefers_configured_public_key(Config) ->
+    PrivateKeyPem = ?config(private_key_pem, Config),
+    {ConfiguredPublicKey, _ConfiguredPrivateKeyPem} = gen_rsa_keypair(),
+    ok = set_login_encryption(required, PrivateKeyPem, public_key_to_pem(ConfiguredPublicKey)),
+    {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
+    ?assertEqual(public_key_to_pem(ConfiguredPublicKey), PublicKeyPem).
+
+t_get_public_key_rejected_when_not_required(_) ->
+    ok = set_login_encryption(optional, <<>>),
+    ?assertMatch(
+        {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
+        api_get([login, public_key])
+    ).
+
 t_encrypted_login_bad_ciphertext(Config) ->
     PublicKey = ?config(public_key, Config),
     {KeyID, SessionKey} = negotiate_key(PublicKey),
@@ -137,9 +156,13 @@ t_login_stores_aes_session_key_in_token_extra(Config) ->
 %%--------------------------------------------------------------------
 
 set_login_encryption(Mode, PrivateKeyPem) ->
+    set_login_encryption(Mode, PrivateKeyPem, <<>>).
+
+set_login_encryption(Mode, PrivateKeyPem, PublicKeyPem) ->
     emqx_config:put([dashboard, login_encryption], #{
         mode => Mode,
-        private_key => PrivateKeyPem
+        private_key => PrivateKeyPem,
+        public_key => PublicKeyPem
     }).
 
 gen_rsa_keypair() ->
@@ -151,6 +174,11 @@ gen_rsa_keypair() ->
     PrivateDer = public_key:der_encode('RSAPrivateKey', PrivateKey),
     PrivatePem = public_key:pem_encode([{'RSAPrivateKey', PrivateDer, not_encrypted}]),
     {PublicKey, iolist_to_binary(PrivatePem)}.
+
+public_key_to_pem(PublicKey) ->
+    iolist_to_binary(
+        public_key:pem_encode([public_key:pem_entry_encode('SubjectPublicKeyInfo', PublicKey)])
+    ).
 
 negotiate_key(PublicKey) ->
     AesKey = crypto:strong_rand_bytes(32),
@@ -226,6 +254,32 @@ api_post_raw_base64(Path, CiphertextB64, ExtraHeaders) ->
     Headers = [noauth_header() | ExtraHeaders],
     Opts = (post_request_opts())#{'content-type' => "text/plain"},
     case request_api(post, uri(Path), [], Headers, {raw, CiphertextB64}, Opts) of
+        {ok, Code, ResponseBody} when Code >= 200 andalso Code =< 299 ->
+            Res =
+                case emqx_utils_json:safe_decode(ResponseBody) of
+                    {ok, Decoded} -> Decoded;
+                    {error, _} -> ResponseBody
+                end,
+            {ok, Res};
+        {ok, Code, Body} ->
+            Decoded =
+                case emqx_utils_json:safe_decode(Body) of
+                    {ok, Data0} -> Data0;
+                    {error, _} -> Body
+                end,
+            {error, Code, Decoded};
+        {error, {{_HttpVer, Code, _Message}, _RespHeaders, Body}} ->
+            Decoded =
+                case emqx_utils_json:safe_decode(Body) of
+                    {ok, Data0} -> Data0;
+                    {error, _} -> Body
+                end,
+            {error, Code, Decoded}
+    end.
+
+api_get(Path) ->
+    Headers = [noauth_header()],
+    case request_api(get, uri(Path), [], Headers, [], post_request_opts()) of
         {ok, Code, ResponseBody} when Code >= 200 andalso Code =< 299 ->
             Res =
                 case emqx_utils_json:safe_decode(ResponseBody) of

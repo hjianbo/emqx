@@ -22,6 +22,7 @@
 -export([
     login/2,
     login_key/2,
+    login_public_key/2,
     logout/2,
     users/2,
     user/2,
@@ -48,6 +49,7 @@ api_spec() ->
 paths() ->
     [
         "/login/key",
+        "/login/public_key",
         "/login",
         "/logout",
         "/users",
@@ -84,6 +86,22 @@ schema("/login/key") ->
             'requestBody' => fields([encrypted_key]),
             responses => #{
                 200 => fields([key_id]),
+                400 => emqx_dashboard_swagger:error_codes(
+                    [?BAD_REQUEST], ?DESC(login_failed_response400)
+                )
+            },
+            security => []
+        }
+    };
+schema("/login/public_key") ->
+    #{
+        'operationId' => login_public_key,
+        get => #{
+            tags => [<<"dashboard">>],
+            desc => <<"Get dashboard login RSA public key">>,
+            summary => <<"Dashboard login public key">>,
+            responses => #{
+                200 => fields([public_key]),
                 400 => emqx_dashboard_swagger:error_codes(
                     [?BAD_REQUEST], ?DESC(login_failed_response400)
                 )
@@ -312,6 +330,12 @@ field(key_id) ->
             desc => <<"Key ID returned by /login/key">>,
             required => true
         })};
+field(public_key) ->
+    {public_key,
+        mk(binary(), #{
+            desc => <<"RSA public key PEM text">>,
+            required => true
+        })};
 field(encrypted_key) ->
     {encrypted_key,
         mk(
@@ -357,6 +381,14 @@ login(post, #{body := Params0} = Req) ->
 
 login_key(post, #{body := Params}) ->
     case emqx_dashboard_login_crypto:negotiate_session_key(Params) of
+        {ok, Result} ->
+            {200, Result};
+        {error, ErrorTuple} ->
+            ErrorTuple
+    end.
+
+login_public_key(get, _Req) ->
+    case emqx_dashboard_login_crypto:get_login_public_key() of
         {ok, Result} ->
             {200, Result};
         {error, ErrorTuple} ->

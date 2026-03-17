@@ -165,6 +165,15 @@ fields("login_encryption") ->
                     importance => ?IMPORTANCE_HIGH
                 }
             )},
+        {"public_key",
+            ?HOCON(
+                binary(),
+                #{
+                    default => <<>>,
+                    desc => <<"RSA public key PEM text or path">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )},
         {"private_key",
             ?HOCON(
                 emqx_schema_secret:secret(),

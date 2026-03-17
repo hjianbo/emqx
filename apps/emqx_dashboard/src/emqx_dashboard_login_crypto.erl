@@ -7,9 +7,11 @@
 -feature(maybe_expr, enable).
 
 -include("emqx_dashboard.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 -export([
     create_tables/0,
+    get_login_public_key/0,
     negotiate_session_key/1,
     normalize_login_params/2,
     encrypt_login_response/2
@@ -35,6 +37,25 @@ create_tables() ->
         {attributes, record_info(fields, login_pending_key)}
     ]),
     [?PENDING_KEY_TAB].
+
+-spec get_login_public_key() ->
+    {ok, map()} | {error, {non_neg_integer(), atom(), binary()}}.
+get_login_public_key() ->
+    Conf = login_encryption_config(),
+    Mode = maps:get(mode, Conf),
+    case Mode of
+        required ->
+            maybe
+                {ok, PublicKey} ?= load_public_key_from_conf(Conf),
+                {ok, PublicKeyPem} ?= to_public_key_pem(PublicKey),
+                {ok, #{public_key => PublicKeyPem}}
+            else
+                {error, Msg} ->
+                    bad_request(Msg)
+            end;
+        _ ->
+            bad_request(<<"Login public key API is only available when mode=required">>)
+    end.
 
 -spec negotiate_session_key(map()) ->
     {ok, map()} | {error, {non_neg_integer(), atom(), binary()}}.
@@ -110,6 +131,7 @@ login_encryption_config() ->
     Conf = normalize_keys(Conf0),
     #{
         mode => maps:get(mode, Conf, disabled),
+        public_key => emqx_secret:unwrap(maps:get(public_key, Conf, <<>>)),
         private_key => emqx_secret:unwrap(maps:get(private_key, Conf, <<>>))
     }.
 
@@ -122,6 +144,7 @@ normalize_keys(Conf) ->
         end,
     #{
         mode => Mode,
+        public_key => get_with_keys(Conf, [public_key, <<"public_key">>], <<>>),
         private_key => get_with_keys(Conf, [private_key, <<"private_key">>], <<>>)
     }.
 
@@ -269,6 +292,70 @@ load_private_key(PrivateKey0) when is_binary(PrivateKey0); is_list(PrivateKey0) 
     catch
         _:_ ->
             {error, <<"Bad RSA private key PEM">>}
+    end.
+
+load_public_key_from_conf(Conf) ->
+    case maps:get(public_key, Conf, <<>>) of
+        <<>> ->
+            derive_public_key_from_private_key(maps:get(private_key, Conf, <<>>));
+        PublicKey ->
+            load_public_key(PublicKey)
+    end.
+
+load_public_key(PublicKey0) when is_binary(PublicKey0); is_list(PublicKey0) ->
+    PublicKey = iolist_to_binary(PublicKey0),
+    Pem =
+        case maybe_read_file(PublicKey) of
+            {ok, Content} -> Content;
+            error -> PublicKey
+        end,
+    try
+        case public_key:pem_decode(Pem) of
+            [Entry | _] ->
+                decode_rsa_public_key(Entry);
+            [] ->
+                {error, <<"Bad RSA public key PEM">>}
+        end
+    catch
+        _:_ ->
+            {error, <<"Bad RSA public key PEM">>}
+    end.
+
+decode_rsa_public_key(Entry) ->
+    try
+        case public_key:pem_entry_decode(Entry) of
+            #'RSAPublicKey'{} = PublicKey ->
+                {ok, PublicKey};
+            _ ->
+                {error, <<"Bad RSA public key PEM">>}
+        end
+    catch
+        _:_ ->
+            {error, <<"Bad RSA public key PEM">>}
+    end.
+
+derive_public_key_from_private_key(PrivateKeyPem) ->
+    maybe
+        {ok, PrivateKey} ?= load_private_key(PrivateKeyPem),
+        {ok, PublicKey} ?= rsa_private_to_public_key(PrivateKey),
+        {ok, PublicKey}
+    else
+        {error, _} = Error ->
+            Error
+    end.
+
+rsa_private_to_public_key(#'RSAPrivateKey'{modulus = N, publicExponent = E}) ->
+    {ok, #'RSAPublicKey'{modulus = N, publicExponent = E}};
+rsa_private_to_public_key(_) ->
+    {error, <<"Bad RSA private key PEM">>}.
+
+to_public_key_pem(PublicKey) ->
+    try
+        Pem = public_key:pem_encode([public_key:pem_entry_encode('SubjectPublicKeyInfo', PublicKey)]),
+        {ok, iolist_to_binary(Pem)}
+    catch
+        _:_ ->
+            {error, <<"Bad RSA public key PEM">>}
     end.
 
 maybe_read_file(Path) ->
