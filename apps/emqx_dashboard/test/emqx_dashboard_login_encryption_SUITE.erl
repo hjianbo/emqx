@@ -138,6 +138,26 @@ t_get_public_key_supports_etc_dir_env_path(_) ->
     {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
     ?assertMatch({_, _}, binary:match(PublicKeyPem, <<"BEGIN PUBLIC KEY">>)).
 
+t_login_encryption_config_rejects_bad_private_key(_) ->
+    ?assertMatch(
+        {error, _},
+        update_login_encryption_config(required, <<"not a pem">>, <<>>)
+    ).
+
+t_login_encryption_config_rejects_unpaired_public_private(_) ->
+    {_PublicKeyA, PrivateKeyPemA} = gen_rsa_keypair(),
+    {PublicKeyB, _PrivateKeyPemB} = gen_rsa_keypair(),
+    ?assertMatch(
+        {error, _},
+        update_login_encryption_config(required, PrivateKeyPemA, public_key_to_pem(PublicKeyB))
+    ).
+
+t_login_encryption_config_skips_validation_when_not_required(_) ->
+    ?assertMatch(
+        {ok, _},
+        update_login_encryption_config(optional, <<"not a pem">>, <<"not a pem">>)
+    ).
+
 t_public_key_api_not_in_swagger(_) ->
     {ok, {{"HTTP/1.1", 200, "OK"}, _Headers, Body}} =
         httpc:request(
@@ -190,6 +210,19 @@ set_login_encryption(Mode, PrivateKeyPem, PublicKeyPem) ->
         private_key => PrivateKeyPem,
         public_key => PublicKeyPem
     }).
+
+update_login_encryption_config(Mode, PrivateKeyPem, PublicKeyPem) ->
+    DashboardRaw0 = emqx:get_raw_config([dashboard]),
+    DashboardRaw1 = emqx_utils_maps:deep_put(
+        [<<"login_encryption">>, <<"mode">>], DashboardRaw0, Mode
+    ),
+    DashboardRaw2 = emqx_utils_maps:deep_put(
+        [<<"login_encryption">>, <<"private_key">>], DashboardRaw1, PrivateKeyPem
+    ),
+    DashboardRaw3 = emqx_utils_maps:deep_put(
+        [<<"login_encryption">>, <<"public_key">>], DashboardRaw2, PublicKeyPem
+    ),
+    emqx:update_config([dashboard], DashboardRaw3).
 
 gen_rsa_keypair() ->
     PrivateKey = public_key:generate_key({rsa, 2048, 17}),

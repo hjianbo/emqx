@@ -12,6 +12,7 @@
 -export([
     create_tables/0,
     get_login_public_key/0,
+    validate_login_encryption_config/1,
     negotiate_session_key/1,
     normalize_login_params/2,
     encrypt_login_response/2
@@ -74,6 +75,17 @@ negotiate_session_key(Params) when is_map(Params) ->
             end;
         _ ->
             bad_request(<<"Login key API is only available when mode=required">>)
+    end.
+
+-spec validate_login_encryption_config(map()) -> ok | {error, binary()}.
+validate_login_encryption_config(Conf0) when is_map(Conf0) ->
+    Conf = normalize_keys(maybe_to_map(Conf0)),
+    Mode = maps:get(mode, Conf, disabled),
+    case Mode of
+        required ->
+            validate_required_login_encryption_config(Conf);
+        _ ->
+            ok
     end.
 
 -spec normalize_login_params(term(), map()) ->
@@ -181,6 +193,23 @@ maybe_to_map(Map) when is_map(Map) ->
     Map;
 maybe_to_map(_) ->
     #{}.
+
+validate_required_login_encryption_config(Conf0) ->
+    Conf = #{
+        public_key => emqx_secret:unwrap(maps:get(public_key, Conf0, <<>>)),
+        private_key => emqx_secret:unwrap(maps:get(private_key, Conf0, <<>>))
+    },
+    maybe
+        {ok, PublicKey} ?= load_public_key_from_conf(Conf),
+        {ok, DerivedPublicKey} ?= derive_public_key_from_private_key(maps:get(private_key, Conf)),
+        true ?= is_same_rsa_public_key(PublicKey, DerivedPublicKey),
+        ok
+    else
+        false ->
+            {error, <<"Dashboard login_encryption.public_key/private_key are not a pair">>};
+        {error, _} = Error ->
+            Error
+    end.
 
 decrypt_negotiated_session_key(Params, Conf) ->
     maybe
@@ -348,6 +377,14 @@ rsa_private_to_public_key(#'RSAPrivateKey'{modulus = N, publicExponent = E}) ->
     {ok, #'RSAPublicKey'{modulus = N, publicExponent = E}};
 rsa_private_to_public_key(_) ->
     {error, <<"Bad RSA private key PEM">>}.
+
+is_same_rsa_public_key(
+    #'RSAPublicKey'{modulus = N, publicExponent = E},
+    #'RSAPublicKey'{modulus = N, publicExponent = E}
+) ->
+    true;
+is_same_rsa_public_key(_, _) ->
+    false.
 
 to_public_key_pem(PublicKey) ->
     try

@@ -71,7 +71,8 @@ fields("dashboard") ->
             ?HOCON(
                 ?R_REF("login_encryption"),
                 #{
-                    desc => <<"Dashboard login encryption settings">>
+                    desc => <<"Dashboard login encryption settings">>,
+                    validator => fun validate_login_encryption/1
                 }
             )},
         {cors, fun cors/1},
@@ -376,6 +377,21 @@ validate_sample_interval(Second) ->
             Msg = "must be between 1 and 60 and be a divisor of 60.",
             {error, Msg}
     end.
+
+validate_login_encryption(Conf) ->
+    case emqx_dashboard_login_crypto:validate_login_encryption_config(Conf) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            {error, error_reason(Reason)}
+    end.
+
+error_reason(Reason) when is_binary(Reason) ->
+    unicode:characters_to_list(Reason, utf8);
+error_reason(Reason) when is_list(Reason) ->
+    Reason;
+error_reason(Reason) ->
+    io_lib:format("~p", [Reason]).
 
 %% Cannot allow >7d because dashboard monitor data is only kept for 7 days
 validate_hwmark_expire_time(ExpireTime) ->
