@@ -1,1 +1,5 @@
 Place your SSL/TLS Certificates here.
+
+`dashboard_login_rsa_private.pem` and `dashboard_login_rsa_public.pem` are
+packaged as dashboard login encryption quick-start keys. Replace them in
+production.

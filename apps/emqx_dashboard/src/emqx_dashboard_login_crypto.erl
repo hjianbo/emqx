@@ -358,7 +358,8 @@ to_public_key_pem(PublicKey) ->
             {error, <<"Bad RSA public key PEM">>}
     end.
 
-maybe_read_file(Path) ->
+maybe_read_file(Path0) ->
+    Path = emqx_utils_schema:naive_env_interpolation(Path0),
     case filelib:is_file(Path) of
         true -> file:read_file(Path);
         false -> error

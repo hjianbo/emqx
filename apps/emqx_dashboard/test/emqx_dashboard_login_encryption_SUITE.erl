@@ -130,6 +130,14 @@ t_get_public_key_rejected_when_not_required(_) ->
         api_get([login, public_key])
     ).
 
+t_get_public_key_supports_etc_dir_env_path(_) ->
+    ok = set_login_encryption(
+        required,
+        <<"${EMQX_ETC_DIR}/certs/dashboard_login_rsa_private.pem">>
+    ),
+    {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
+    ?assertMatch({_, _}, binary:match(PublicKeyPem, <<"BEGIN PUBLIC KEY">>)).
+
 t_public_key_api_not_in_swagger(_) ->
     {ok, {{"HTTP/1.1", 200, "OK"}, _Headers, Body}} =
         httpc:request(
