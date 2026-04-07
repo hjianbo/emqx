@@ -19,6 +19,7 @@
 ]).
 
 -define(BAD_REQUEST, 'BAD_REQUEST').
+-define(NOT_FOUND, 'NOT_FOUND').
 -define(PENDING_KEY_TAB, emqx_dashboard_login_pending_keys).
 -define(PENDING_KEY_TTL_MS, 5 * 60 * 1000).
 
@@ -45,7 +46,7 @@ get_login_public_key() ->
     Conf = login_encryption_config(),
     Mode = maps:get(mode, Conf),
     case Mode of
-        required ->
+        enable ->
             maybe
                 {ok, PublicKey} ?= load_public_key_from_conf(Conf),
                 {ok, PublicKeyPem} ?= to_public_key_pem(PublicKey),
@@ -55,7 +56,7 @@ get_login_public_key() ->
                     bad_request(Msg)
             end;
         _ ->
-            bad_request(<<"Login public key API is only available when mode=required">>)
+            not_found(<<"Not Found">>)
     end.
 
 -spec negotiate_session_key(map()) ->
@@ -64,7 +65,7 @@ negotiate_session_key(Params) when is_map(Params) ->
     Conf = login_encryption_config(),
     Mode = maps:get(mode, Conf),
     case Mode of
-        required ->
+        enable ->
             maybe
                 {ok, AesKey} ?= decrypt_negotiated_session_key(Params, Conf),
                 {ok, KeyID} ?= cache_pending_session_key(AesKey),
@@ -74,16 +75,16 @@ negotiate_session_key(Params) when is_map(Params) ->
                     bad_request(Msg)
             end;
         _ ->
-            bad_request(<<"Login key API is only available when mode=required">>)
+            bad_request(<<"Login key API is only available when mode=enable">>)
     end.
 
 -spec validate_login_encryption_config(map()) -> ok | {error, binary()}.
 validate_login_encryption_config(Conf0) when is_map(Conf0) ->
     Conf = normalize_keys(maybe_to_map(Conf0)),
-    Mode = maps:get(mode, Conf, disabled),
+    Mode = maps:get(mode, Conf, disable),
     case Mode of
-        required ->
-            validate_required_login_encryption_config(Conf);
+        enable ->
+            validate_enable_login_encryption_config(Conf);
         _ ->
             ok
     end.
@@ -94,7 +95,7 @@ normalize_login_params(Body, Headers) when is_map(Headers) ->
     Conf = login_encryption_config(),
     Mode = maps:get(mode, Conf),
     case Mode of
-        required ->
+        enable ->
             maybe
                 {ok, CiphertextB64} ?= parse_encrypted_login_body(Body),
                 {ok, KeyID} ?= fetch_key_id(Headers),
@@ -142,7 +143,7 @@ login_encryption_config() ->
     Conf0 = maybe_to_map(Raw),
     Conf = normalize_keys(Conf0),
     #{
-        mode => maps:get(mode, Conf, disabled),
+        mode => maps:get(mode, Conf, disable),
         public_key => emqx_secret:unwrap(maps:get(public_key, Conf, <<>>)),
         private_key => emqx_secret:unwrap(maps:get(private_key, Conf, <<>>))
     }.
@@ -168,18 +169,22 @@ mode_from_legacy(Conf) ->
         false
     ),
     case {Enable, RequireEncryptedBody} of
-        {true, true} -> required;
-        {true, false} -> optional;
-        _ -> disabled
+        {true, true} -> enable;
+        {true, false} -> disable;
+        _ -> disable
     end.
 
-normalize_mode(required) -> required;
-normalize_mode(optional) -> optional;
-normalize_mode(disabled) -> disabled;
-normalize_mode(<<"required">>) -> required;
-normalize_mode(<<"optional">>) -> optional;
-normalize_mode(<<"disabled">>) -> disabled;
-normalize_mode(_) -> disabled.
+normalize_mode(enable) -> enable;
+normalize_mode(disable) -> disable;
+normalize_mode(required) -> enable;
+normalize_mode(optional) -> disable;
+normalize_mode(disabled) -> disable;
+normalize_mode(<<"enable">>) -> enable;
+normalize_mode(<<"disable">>) -> disable;
+normalize_mode(<<"required">>) -> enable;
+normalize_mode(<<"optional">>) -> disable;
+normalize_mode(<<"disabled">>) -> disable;
+normalize_mode(_) -> disable.
 
 get_with_keys(Map, [Key | Rest], Default) ->
     case maps:find(Key, Map) of
@@ -194,12 +199,13 @@ maybe_to_map(Map) when is_map(Map) ->
 maybe_to_map(_) ->
     #{}.
 
-validate_required_login_encryption_config(Conf0) ->
+validate_enable_login_encryption_config(Conf0) ->
     Conf = #{
         public_key => emqx_secret:unwrap(maps:get(public_key, Conf0, <<>>)),
         private_key => emqx_secret:unwrap(maps:get(private_key, Conf0, <<>>))
     },
     maybe
+        {ok, _} ?= fetch_required_public_key(Conf),
         {ok, PublicKey} ?= load_public_key_from_conf(Conf),
         {ok, DerivedPublicKey} ?= derive_public_key_from_private_key(maps:get(private_key, Conf)),
         true ?= is_same_rsa_public_key(PublicKey, DerivedPublicKey),
@@ -209,6 +215,22 @@ validate_required_login_encryption_config(Conf0) ->
             {error, <<"Dashboard login_encryption.public_key/private_key are not a pair">>};
         {error, _} = Error ->
             Error
+    end.
+
+fetch_required_public_key(Conf) ->
+    case maps:get(public_key, Conf, <<>>) of
+        <<>> ->
+            {error, <<"Dashboard login_encryption.public_key is required when mode=enable">>};
+        PublicKey when is_list(PublicKey) ->
+            case iolist_to_binary(PublicKey) of
+                <<>> ->
+                    {error,
+                        <<"Dashboard login_encryption.public_key is required when mode=enable">>};
+                _ ->
+                    {ok, PublicKey}
+            end;
+        PublicKey ->
+            {ok, PublicKey}
     end.
 
 decrypt_negotiated_session_key(Params, Conf) ->
@@ -324,12 +346,7 @@ load_private_key(PrivateKey0) when is_binary(PrivateKey0); is_list(PrivateKey0) 
     end.
 
 load_public_key_from_conf(Conf) ->
-    case maps:get(public_key, Conf, <<>>) of
-        <<>> ->
-            derive_public_key_from_private_key(maps:get(private_key, Conf, <<>>));
-        PublicKey ->
-            load_public_key(PublicKey)
-    end.
+    load_public_key(maps:get(public_key, Conf, <<>>)).
 
 load_public_key(PublicKey0) when is_binary(PublicKey0); is_list(PublicKey0) ->
     PublicKey = iolist_to_binary(PublicKey0),
@@ -502,3 +519,6 @@ find_first(_Map, []) ->
 
 bad_request(Message) ->
     {error, {400, ?BAD_REQUEST, Message}}.
+
+not_found(Message) ->
+    {error, {404, ?NOT_FOUND, Message}}.

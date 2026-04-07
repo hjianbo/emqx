@@ -159,9 +159,9 @@ fields("login_encryption") ->
     [
         {"mode",
             ?HOCON(
-                hoconsc:enum([disabled, optional, required]),
+                hoconsc:enum([disable, enable]),
                 #{
-                    default => disabled,
+                    default => disable,
                     desc => <<"Dashboard /login body encryption mode">>,
                     importance => ?IMPORTANCE_HIGH
                 }

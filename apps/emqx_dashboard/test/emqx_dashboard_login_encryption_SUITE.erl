@@ -49,7 +49,7 @@ init_per_testcase(_TestCase, Config) ->
         ?USERNAME, ?PASSWORD, ?ROLE_SUPERUSER, <<"simple_description">>
     ),
     {PublicKey, PrivateKeyPem} = gen_rsa_keypair(),
-    ok = set_login_encryption(required, PrivateKeyPem),
+    ok = set_login_encryption(enable, PrivateKeyPem, public_key_to_pem(PublicKey)),
     [
         {public_key, PublicKey},
         {private_key_pem, PrivateKeyPem}
@@ -57,7 +57,7 @@ init_per_testcase(_TestCase, Config) ->
     ].
 
 end_per_testcase(_TestCase, Config) ->
-    ok = set_login_encryption(disabled, <<>>),
+    ok = set_login_encryption(disable, <<>>, <<>>),
     mnesia:clear_table(?ADMIN_JWT),
     mnesia:clear_table(?PENDING_KEY_TAB),
     Config.
@@ -74,22 +74,23 @@ t_encrypted_login_success(Config) ->
         decrypt_login_response(EncryptedResponseB64, SessionKey)
     ).
 
-t_plain_login_works_when_optional(_) ->
-    ok = set_login_encryption(optional, <<>>),
+t_plain_login_works_when_disable(_) ->
+    ok = set_login_encryption(disable, <<>>, <<>>),
     ?assertMatch(
         {ok, #{<<"token">> := _}},
         api_post([login], #{username => ?USERNAME, password => ?PASSWORD})
     ).
 
-t_plain_login_rejected_when_required(Config) ->
+t_plain_login_rejected_when_enable(Config) ->
     PrivateKeyPem = ?config(private_key_pem, Config),
-    ok = set_login_encryption(required, PrivateKeyPem),
+    PublicKey = ?config(public_key, Config),
+    ok = set_login_encryption(enable, PrivateKeyPem, public_key_to_pem(PublicKey)),
     ?assertMatch(
         {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
         api_post([login], #{username => ?USERNAME, password => ?PASSWORD})
     ).
 
-t_json_ciphertext_wrapper_rejected_when_required(Config) ->
+t_json_ciphertext_wrapper_rejected_when_enable(Config) ->
     PublicKey = ?config(public_key, Config),
     {KeyID, SessionKey} = negotiate_key(PublicKey),
     CiphertextB64 = encrypted_login_body(?USERNAME, ?PASSWORD, SessionKey),
@@ -102,9 +103,9 @@ t_json_ciphertext_wrapper_rejected_when_required(Config) ->
         )
     ).
 
-t_key_agreement_rejected_when_not_required(Config) ->
+t_key_agreement_rejected_when_not_enable(Config) ->
     PublicKey = ?config(public_key, Config),
-    ok = set_login_encryption(optional, <<>>),
+    ok = set_login_encryption(disable, <<>>, <<>>),
     Body = key_agreement_body(PublicKey, crypto:strong_rand_bytes(32)),
     ?assertMatch(
         {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
@@ -119,21 +120,22 @@ t_get_public_key_success(Config) ->
 t_get_public_key_prefers_configured_public_key(Config) ->
     PrivateKeyPem = ?config(private_key_pem, Config),
     {ConfiguredPublicKey, _ConfiguredPrivateKeyPem} = gen_rsa_keypair(),
-    ok = set_login_encryption(required, PrivateKeyPem, public_key_to_pem(ConfiguredPublicKey)),
+    ok = set_login_encryption(enable, PrivateKeyPem, public_key_to_pem(ConfiguredPublicKey)),
     {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
     ?assertEqual(public_key_to_pem(ConfiguredPublicKey), PublicKeyPem).
 
-t_get_public_key_rejected_when_not_required(_) ->
-    ok = set_login_encryption(optional, <<>>),
+t_get_public_key_returns_not_found_when_disable(_) ->
+    ok = set_login_encryption(disable, <<>>, <<>>),
     ?assertMatch(
-        {error, 400, #{<<"code">> := <<"BAD_REQUEST">>}},
+        {error, 404, #{<<"code">> := <<"NOT_FOUND">>}},
         api_get([login, public_key])
     ).
 
 t_get_public_key_supports_etc_dir_env_path(_) ->
     ok = set_login_encryption(
-        required,
-        <<"${EMQX_ETC_DIR}/certs/dashboard_login_rsa_private.pem">>
+        enable,
+        <<"${EMQX_ETC_DIR}/certs/dashboard_login_rsa_private.pem">>,
+        <<"${EMQX_ETC_DIR}/certs/dashboard_login_rsa_public.pem">>
     ),
     {ok, #{<<"public_key">> := PublicKeyPem}} = api_get([login, public_key]),
     ?assertMatch({_, _}, binary:match(PublicKeyPem, <<"BEGIN PUBLIC KEY">>)).
@@ -141,7 +143,7 @@ t_get_public_key_supports_etc_dir_env_path(_) ->
 t_login_encryption_config_rejects_bad_private_key(_) ->
     ?assertMatch(
         {error, _},
-        update_login_encryption_config(required, <<"not a pem">>, <<>>)
+        update_login_encryption_config(enable, <<"not a pem">>, <<"not a pem">>)
     ).
 
 t_login_encryption_config_rejects_unpaired_public_private(_) ->
@@ -149,13 +151,19 @@ t_login_encryption_config_rejects_unpaired_public_private(_) ->
     {PublicKeyB, _PrivateKeyPemB} = gen_rsa_keypair(),
     ?assertMatch(
         {error, _},
-        update_login_encryption_config(required, PrivateKeyPemA, public_key_to_pem(PublicKeyB))
+        update_login_encryption_config(enable, PrivateKeyPemA, public_key_to_pem(PublicKeyB))
     ).
 
-t_login_encryption_config_skips_validation_when_not_required(_) ->
+t_login_encryption_config_rejects_missing_public_key_when_enable(_) ->
+    ?assertMatch(
+        {error, _},
+        update_login_encryption_config(enable, <<"not a pem">>, <<>>)
+    ).
+
+t_login_encryption_config_skips_validation_when_disable(_) ->
     ?assertMatch(
         {ok, _},
-        update_login_encryption_config(optional, <<"not a pem">>, <<"not a pem">>)
+        update_login_encryption_config(disable, <<"not a pem">>, <<"not a pem">>)
     ).
 
 t_public_key_api_not_in_swagger(_) ->
@@ -200,9 +208,6 @@ t_login_stores_aes_session_key_in_token_extra(Config) ->
 %%--------------------------------------------------------------------
 %% Helpers
 %%--------------------------------------------------------------------
-
-set_login_encryption(Mode, PrivateKeyPem) ->
-    set_login_encryption(Mode, PrivateKeyPem, <<>>).
 
 set_login_encryption(Mode, PrivateKeyPem, PublicKeyPem) ->
     emqx_config:put([dashboard, login_encryption], #{
