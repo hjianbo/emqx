@@ -149,41 +149,18 @@ login_encryption_config() ->
     }.
 
 normalize_keys(Conf) ->
-    Mode0 = get_with_keys(Conf, [mode, <<"mode">>], undefined),
-    Mode =
-        case Mode0 of
-            undefined -> mode_from_legacy(Conf);
-            _ -> normalize_mode(Mode0)
-        end,
+    Mode0 = get_with_keys(Conf, [mode, <<"mode">>], disable),
+    Mode = normalize_mode(Mode0),
     #{
         mode => Mode,
         public_key => get_with_keys(Conf, [public_key, <<"public_key">>], <<>>),
         private_key => get_with_keys(Conf, [private_key, <<"private_key">>], <<>>)
     }.
 
-mode_from_legacy(Conf) ->
-    Enable = get_with_keys(Conf, [enable, <<"enable">>], false),
-    RequireEncryptedBody = get_with_keys(
-        Conf,
-        [require_encrypted_body, <<"require_encrypted_body">>],
-        false
-    ),
-    case {Enable, RequireEncryptedBody} of
-        {true, true} -> enable;
-        {true, false} -> disable;
-        _ -> disable
-    end.
-
 normalize_mode(enable) -> enable;
 normalize_mode(disable) -> disable;
-normalize_mode(required) -> enable;
-normalize_mode(optional) -> disable;
-normalize_mode(disabled) -> disable;
 normalize_mode(<<"enable">>) -> enable;
 normalize_mode(<<"disable">>) -> disable;
-normalize_mode(<<"required">>) -> enable;
-normalize_mode(<<"optional">>) -> disable;
-normalize_mode(<<"disabled">>) -> disable;
 normalize_mode(_) -> disable.
 
 get_with_keys(Map, [Key | Rest], Default) ->
