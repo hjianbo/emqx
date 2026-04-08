@@ -13,6 +13,7 @@
     verify/2,
     lookup/1,
     owner/1,
+    set_extra/2,
     destroy/1,
     destroy_by_username/1
 ]).
@@ -152,6 +153,24 @@ owner(Token) ->
     case mria:ro_transaction(?DASHBOARD_SHARD, Fun) of
         {atomic, [#?ADMIN_JWT{username = Username}]} -> {ok, Username};
         {atomic, []} -> {error, not_found}
+    end.
+
+-spec set_extra(Token :: binary(), Extra :: map()) -> ok | {error, not_found | term()}.
+set_extra(Token, Extra) when is_binary(Token), is_map(Extra) ->
+    Fun =
+        fun() ->
+            case mnesia:wread({?TAB, Token}) of
+                [JWT = #?ADMIN_JWT{extra = OldExtra}] ->
+                    mnesia:write(JWT#?ADMIN_JWT{extra = maps:merge(OldExtra, Extra)});
+                [] ->
+                    mnesia:abort(not_found)
+            end
+        end,
+    case mria:sync_transaction(?DASHBOARD_SHARD, Fun) of
+        {atomic, ok} ->
+            ok;
+        {aborted, Reason} ->
+            {error, Reason}
     end.
 
 jwk() ->

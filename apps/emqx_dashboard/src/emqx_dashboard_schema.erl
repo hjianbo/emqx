@@ -67,6 +67,14 @@ fields("dashboard") ->
                     desc => ?DESC(password_expired_time)
                 }
             )},
+        {login_encryption,
+            ?HOCON(
+                ?R_REF("login_encryption"),
+                #{
+                    desc => <<"Dashboard login encryption settings">>,
+                    validator => fun validate_login_encryption/1
+                }
+            )},
         {cors, fun cors/1},
         {swagger_support, fun swagger_support/1},
         {i18n_lang, fun i18n_lang/1},
@@ -147,6 +155,37 @@ fields("https") ->
     ];
 fields("ssl_options") ->
     server_ssl_options();
+fields("login_encryption") ->
+    [
+        {"mode",
+            ?HOCON(
+                hoconsc:enum([disable, enable]),
+                #{
+                    default => disable,
+                    desc => <<"Dashboard /login body encryption mode">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )},
+        {"public_key",
+            ?HOCON(
+                binary(),
+                #{
+                    default => <<>>,
+                    desc => <<"RSA public key PEM text or path">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )},
+        {"private_key",
+            ?HOCON(
+                emqx_schema_secret:secret(),
+                #{
+                    default => <<>>,
+                    sensitive => true,
+                    desc => <<"RSA private key PEM text or path">>,
+                    importance => ?IMPORTANCE_HIGH
+                }
+            )}
+    ];
 fields("mfa_settings") ->
     mfa_fields().
 
@@ -281,6 +320,8 @@ desc("https") ->
     ?DESC(desc_https);
 desc("ssl_options") ->
     ?DESC(ssl_options);
+desc("login_encryption") ->
+    <<"Dashboard login encryption settings">>;
 desc("mfa_settings") ->
     ?DESC(mfa_settings);
 desc(_) ->
@@ -336,6 +377,21 @@ validate_sample_interval(Second) ->
             Msg = "must be between 1 and 60 and be a divisor of 60.",
             {error, Msg}
     end.
+
+validate_login_encryption(Conf) ->
+    case emqx_dashboard_login_crypto:validate_login_encryption_config(Conf) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            {error, error_reason(Reason)}
+    end.
+
+error_reason(Reason) when is_binary(Reason) ->
+    unicode:characters_to_list(Reason, utf8);
+error_reason(Reason) when is_list(Reason) ->
+    Reason;
+error_reason(Reason) ->
+    io_lib:format("~p", [Reason]).
 
 %% Cannot allow >7d because dashboard monitor data is only kept for 7 days
 validate_hwmark_expire_time(ExpireTime) ->

@@ -328,6 +328,7 @@ static_dispatch() ->
 dynamic_dispatch() ->
     [
         {emqx_mgmt_api_status:path(), emqx_mgmt_api_status, []},
+        {emqx_dashboard_login_public_key_api:path(), emqx_dashboard_login_public_key_api, []},
         {'_', emqx_dashboard_not_found, []}
     ].
 
