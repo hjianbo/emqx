@@ -29,7 +29,8 @@
 -ifdef(TEST).
 -export([
     consumer_group_id/2,
-    mqtt_headers_from_kafka_headers/1
+    mqtt_headers_from_kafka_headers/1,
+    build_legacy_mqtt_message/5
 ]).
 -endif.
 
@@ -348,17 +349,20 @@ legacy_maybe_publish_mqtt_message(
     Payload = render(FullMessage, PayloadTemplate),
     MQTTTopic = render(FullMessage, MQTTTopicTemplate),
     MQTTHeaders = mqtt_headers_from_kafka_headers(maps:get(headers, FullMessage, #{})),
-    MQTTMessage =
-        case MQTTHeaders of
-            #{} ->
-                emqx_message:make(SourceResId, MQTTQoS, MQTTTopic, Payload);
-            _ ->
-                emqx_message:make(SourceResId, MQTTQoS, MQTTTopic, Payload, #{}, MQTTHeaders)
-        end,
+    MQTTMessage = build_legacy_mqtt_message(SourceResId, MQTTQoS, MQTTTopic, Payload, MQTTHeaders),
     _ = emqx_broker:safe_publish(MQTTMessage),
     ok;
 legacy_maybe_publish_mqtt_message(_MQTTConfig, _SourceResId, _FullMessage) ->
     ok.
+
+build_legacy_mqtt_message(SourceResId, MQTTQoS, MQTTTopic, Payload, MQTTHeaders)
+  when is_map(MQTTHeaders) ->
+    case map_size(MQTTHeaders) of
+        0 ->
+            emqx_message:make(SourceResId, MQTTQoS, MQTTTopic, Payload);
+        _ ->
+            emqx_message:make(SourceResId, MQTTQoS, MQTTTopic, Payload, #{}, MQTTHeaders)
+    end.
 
 %%-------------------------------------------------------------------------------------
 %% Helper fns
