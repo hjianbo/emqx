@@ -230,6 +230,39 @@ t_handle_msg_deliver(_) ->
     ok = meck:expect(emqx_channel, handle_deliver, fun(_, Channel) -> {ok, Channel} end),
     ?assertMatch({ok, _St}, handle_msg({deliver, topic, msg}, st())).
 
+t_next_incoming_msgs_prioritize_quick_uplink_publish(_) ->
+    %% Parse output is reversed list; original network order assumed:
+    %% 1) normal datas, 2) quick datas.
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+    Quick = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quick/datas">>, 2, <<"q">>),
+    ParseOutputReversed = [Quick, Normal],
+    ?assertEqual(
+        [{incoming, Quick}, {incoming, Normal}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
+t_next_incoming_msgs_prioritize_quick_uplink_topic_variants(_) ->
+    %% Original network order: quickdatas, normal datas, quickevents.
+    QuickDatas = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quickdatas">>, 1, <<"qd">>),
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 2, <<"n">>),
+    QuickEvents = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quickevents">>, 3, <<"qe">>),
+    ParseOutputReversed = [QuickEvents, Normal, QuickDatas],
+    ?assertEqual(
+        [{incoming, QuickDatas}, {incoming, QuickEvents}, {incoming, Normal}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
+t_next_incoming_msgs_prioritize_quick_publish_when_mixed_packets(_) ->
+    %% Mixed batch: quick publish is moved to the head.
+    P1 = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"p1">>),
+    P2 = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quick/datas">>, 2, <<"p2">>),
+    Ping = ?PACKET(?PINGREQ),
+    ParseOutputReversed = [P2, Ping, P1],
+    ?assertEqual(
+        [{incoming, P2}, {incoming, P1}, {incoming, Ping}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
 t_handle_msg_inet_reply(_) ->
     ?assertMatch(
         {stop, {shutdown, for_testing}, _St},
