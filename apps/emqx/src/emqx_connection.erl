@@ -67,6 +67,9 @@
 %% Export for CT
 -export([set_field/3]).
 
+%% Export for WS/QUIC incoming prioritization
+-export([prioritize_incoming_packets/1]).
+
 -export_type([
     state/0,
     parser/0
@@ -121,6 +124,7 @@
 -opaque state() :: #state{}.
 
 -define(ACTIVE_N, 10).
+-define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
 
 -define(INFO_KEYS, [
     socktype,
@@ -747,10 +751,11 @@ next_incoming_msgs([Packet]) ->
     {incoming, Packet};
 next_incoming_msgs(Packets) ->
     OrderedPackets = lists:reverse(Packets),
-    PrioritizedPackets = prioritize_quick_uplink_publish_packets(OrderedPackets),
+    PrioritizedPackets = prioritize_incoming_packets(OrderedPackets),
     [{incoming, Packet} || Packet <- PrioritizedPackets].
 
-prioritize_quick_uplink_publish_packets(Packets) ->
+-spec prioritize_incoming_packets([term()]) -> [term()].
+prioritize_incoming_packets(Packets) when is_list(Packets) ->
     {QuickPackets, NormalPackets} = lists:partition(
         fun is_quick_uplink_publish_packet/1,
         Packets
@@ -763,17 +768,23 @@ is_quick_uplink_publish_packet(_) ->
     false.
 
 is_quick_uplink_topic(Topic) when is_binary(Topic) ->
-    has_binary_suffix(Topic, <<"/quick/datas">>) orelse
-        has_binary_suffix(Topic, <<"/quickdatas">>) orelse
-        has_binary_suffix(Topic, <<"/quickevents">>);
+    do_is_quick_uplink_topic(
+        Topic, persistent_term:get(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, undefined)
+    );
 is_quick_uplink_topic(_) ->
     false.
 
-has_binary_suffix(Topic, Suffix) ->
-    TopicSize = byte_size(Topic),
-    SuffixSize = byte_size(Suffix),
-    TopicSize >= SuffixSize andalso
-        binary:part(Topic, TopicSize - SuffixSize, SuffixSize) =:= Suffix.
+do_is_quick_uplink_topic(Topic, {Module, Function, Args}) when
+    is_atom(Module), is_atom(Function), is_list(Args)
+->
+    try erlang:apply(Module, Function, [Topic | Args]) of
+        true -> true;
+        _ -> false
+    catch
+        _:_ -> false
+    end;
+do_is_quick_uplink_topic(_Topic, _) ->
+    false.
 
 parse_incoming(Data, State = #state{parser = Parser}) ->
     try

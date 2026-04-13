@@ -631,7 +631,8 @@ handle_incoming(Packets = [?CONNECT_PACKET(ConnPkt) | _], State) ->
     NState = cancel_idle_timer(State#state{serialize = Serialize}),
     do_handle_incoming(Packets, NState);
 handle_incoming(Packets, State) ->
-    do_handle_incoming(Packets, State).
+    PrioritizedPackets = emqx_connection:prioritize_incoming_packets(Packets),
+    do_handle_incoming(PrioritizedPackets, State).
 
 -compile({inline, [do_handle_incoming/2]}).
 do_handle_incoming(Packets, State) ->
