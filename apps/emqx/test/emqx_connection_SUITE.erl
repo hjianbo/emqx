@@ -263,6 +263,18 @@ t_next_incoming_msgs_prioritize_quick_publish_when_mixed_packets(_) ->
         emqx_connection:next_incoming_msgs(ParseOutputReversed)
     ).
 
+t_next_incoming_msgs_prioritize_multiple_quick_publish_when_mixed_packets(_) ->
+    %% Multiple quick publish packets keep FIFO while moving ahead.
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+    Quick1 = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quick/datas">>, 2, <<"q1">>),
+    Ping = ?PACKET(?PINGREQ),
+    Quick2 = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quickevents">>, 3, <<"q2">>),
+    ParseOutputReversed = [Quick2, Ping, Quick1, Normal],
+    ?assertEqual(
+        [{incoming, Quick1}, {incoming, Quick2}, {incoming, Normal}, {incoming, Ping}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
 t_handle_msg_inet_reply(_) ->
     ?assertMatch(
         {stop, {shutdown, for_testing}, _St},
