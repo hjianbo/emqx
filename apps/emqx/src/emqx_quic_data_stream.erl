@@ -135,7 +135,7 @@ handle_stream_data(
 ->
     {MQTTPackets, NewPS} = parse_incoming(list_to_binary(lists:reverse([Bin | QueuedData])), PS),
     OrderedPackets = lists:reverse(MQTTPackets),
-    PrioritizedPackets = emqx_quick_priority:prioritize_incoming_packets(OrderedPackets),
+    PrioritizedPackets = emqx_connection:prioritize_incoming_packets(OrderedPackets),
     NewTQ = lists:foldl(
         fun(Item, Acc) ->
             queue:in(Item, Acc)
