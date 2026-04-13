@@ -252,6 +252,16 @@ t_next_incoming_msgs_prioritize_quick_uplink_topic_variants(_) ->
         emqx_connection:next_incoming_msgs(ParseOutputReversed)
     ).
 
+t_next_incoming_msgs_do_not_prioritize_non_exact_quick_like_topic(_) ->
+    %% Non-exact topic (double slash) should not be treated as quick uplink topic.
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+    QuickLike = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quick//datas">>, 2, <<"q">>),
+    ParseOutputReversed = [QuickLike, Normal],
+    ?assertEqual(
+        [{incoming, Normal}, {incoming, QuickLike}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
 t_next_incoming_msgs_prioritize_quick_publish_when_mixed_packets(_) ->
     %% Mixed batch: quick publish is moved to the head.
     P1 = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"p1">>),
@@ -260,6 +270,17 @@ t_next_incoming_msgs_prioritize_quick_publish_when_mixed_packets(_) ->
     ParseOutputReversed = [P2, Ping, P1],
     ?assertEqual(
         [{incoming, P2}, {incoming, P1}, {incoming, Ping}],
+        emqx_connection:next_incoming_msgs(ParseOutputReversed)
+    ).
+
+t_next_incoming_msgs_prioritize_quick_publish_before_disconnect_in_mixed_packets(_) ->
+    %% Keep requested behavior: quick publish can move ahead of DISCONNECT in same batch.
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+    Disconnect = ?DISCONNECT_PACKET(),
+    Quick = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/quick/datas">>, 2, <<"q">>),
+    ParseOutputReversed = [Quick, Disconnect, Normal],
+    ?assertEqual(
+        [{incoming, Quick}, {incoming, Normal}, {incoming, Disconnect}],
         emqx_connection:next_incoming_msgs(ParseOutputReversed)
     ).
 

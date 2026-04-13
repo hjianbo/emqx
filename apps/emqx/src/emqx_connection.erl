@@ -763,19 +763,17 @@ is_quick_uplink_publish_packet(_) ->
     false.
 
 is_quick_uplink_topic(Topic) when is_binary(Topic) ->
-    TopicSegments = lists:reverse(binary:split(Topic, <<"/">>, [global, trim_all])),
-    is_quick_uplink_topic_segments(TopicSegments);
+    has_binary_suffix(Topic, <<"/quick/datas">>) orelse
+        has_binary_suffix(Topic, <<"/quickdatas">>) orelse
+        has_binary_suffix(Topic, <<"/quickevents">>);
 is_quick_uplink_topic(_) ->
     false.
 
-is_quick_uplink_topic_segments([<<"datas">>, <<"quick">> | _]) ->
-    true;
-is_quick_uplink_topic_segments([<<"quickdatas">> | _]) ->
-    true;
-is_quick_uplink_topic_segments([<<"quickevents">> | _]) ->
-    true;
-is_quick_uplink_topic_segments(_) ->
-    false.
+has_binary_suffix(Topic, Suffix) ->
+    TopicSize = byte_size(Topic),
+    SuffixSize = byte_size(Suffix),
+    TopicSize >= SuffixSize andalso
+        binary:part(Topic, TopicSize - SuffixSize, SuffixSize) =:= Suffix.
 
 parse_incoming(Data, State = #state{parser = Parser}) ->
     try
