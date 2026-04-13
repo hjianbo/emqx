@@ -134,12 +134,14 @@ handle_stream_data(
     Channel =/= undefined
 ->
     {MQTTPackets, NewPS} = parse_incoming(list_to_binary(lists:reverse([Bin | QueuedData])), PS),
+    OrderedPackets = lists:reverse(MQTTPackets),
+    PrioritizedPackets = emqx_quick_priority:prioritize_incoming_packets(OrderedPackets),
     NewTQ = lists:foldl(
         fun(Item, Acc) ->
             queue:in(Item, Acc)
         end,
         TQ,
-        [{incoming, P} || P <- lists:reverse(MQTTPackets)]
+        [{incoming, P} || P <- PrioritizedPackets]
     ),
     {{continue, handle_appl_msg}, State#{parse_state := NewPS, task_queue := NewTQ}}.
 

@@ -13,6 +13,7 @@
 -compile(nowarn_export_all).
 
 -define(ws_conn, emqx_ws_connection).
+-define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
 
 all() -> emqx_common_test_helpers:all(?MODULE).
 
@@ -341,6 +342,39 @@ t_websocket_incoming(_) ->
     ?assertEqual(<<224, 2, ?RC_MALFORMED_PACKET, 0>>, iolist_to_binary(IoData4)),
     ?assertEqual(<<"invalid_property_code">>, CauseReq).
 
+t_handle_incoming_prioritize_quick_publish_by_mfa(_) ->
+    PrevMFA = persistent_term:get(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, undefined),
+    persistent_term:put(
+        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
+        {?MODULE, is_fast_uplink_topic, []}
+    ),
+    ok = meck:new(emqx_channel, [passthrough, no_history, no_link]),
+    ok = meck:expect(emqx_channel, handle_in, fun(Packet, Channel) ->
+        Handled0 =
+            case erlang:get(handled_packets) of
+                undefined -> [];
+                Packets -> Packets
+            end,
+        erlang:put(handled_packets, [Packet | Handled0]),
+        {ok, Channel}
+    end),
+    try
+        Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+        Ping = ?PACKET(?PINGREQ),
+        Fast = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/fast">>, 2, <<"f">>),
+        _ = ?ws_conn:handle_incoming([Normal, Ping, Fast], st()),
+        ?assertEqual([Fast, Normal, Ping], lists:reverse(erlang:get(handled_packets)))
+    after
+        erlang:erase(handled_packets),
+        meck:unload(emqx_channel),
+        case PrevMFA of
+            undefined ->
+                persistent_term:erase(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA);
+            MFA ->
+                persistent_term:put(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, MFA)
+        end
+    end.
+
 t_websocket_info_check_gc(_) ->
     Stats = #{cnt => 10, oct => 1000},
     {ok, _St} = ?ws_conn:websocket_info({check_gc, Stats}, st()).
@@ -580,3 +614,11 @@ ws_client(State) ->
     after 5000 ->
         ct:fail(ws_timeout)
     end.
+
+is_fast_uplink_topic(Topic) when is_binary(Topic) ->
+    case re:run(Topic, <<"/fast$">>, [{capture, none}]) of
+        match -> true;
+        nomatch -> false
+    end;
+is_fast_uplink_topic(_) ->
+    false.

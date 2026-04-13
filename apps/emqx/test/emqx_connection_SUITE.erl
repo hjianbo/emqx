@@ -11,6 +11,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
+-define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
+
 all() -> emqx_common_test_helpers:all(?MODULE).
 
 %%--------------------------------------------------------------------
@@ -47,6 +49,10 @@ init_per_suite(Config) ->
     ok = meck:expect(emqx_alarm, deactivate, fun(_, _) -> ok end),
 
     Apps = emqx_cth_suite:start([emqx], #{work_dir => emqx_cth_suite:work_dir(Config)}),
+    persistent_term:put(
+        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
+        {?MODULE, is_default_quick_uplink_topic, []}
+    ),
     [{apps, Apps} | Config].
 
 end_per_suite(Config) ->
@@ -57,6 +63,7 @@ end_per_suite(Config) ->
     ok = meck:unload(emqx_metrics),
     ok = meck:unload(emqx_hooks),
     ok = meck:unload(emqx_alarm),
+    persistent_term:erase(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA),
 
     emqx_cth_suite:stop(proplists:get_value(apps, Config)).
 
@@ -295,6 +302,26 @@ t_next_incoming_msgs_prioritize_multiple_quick_publish_when_mixed_packets(_) ->
         [{incoming, Quick1}, {incoming, Quick2}, {incoming, Normal}, {incoming, Ping}],
         emqx_connection:next_incoming_msgs(ParseOutputReversed)
     ).
+
+t_next_incoming_msgs_use_mfa_callback(_) ->
+    Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
+    Fast = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/fast">>, 2, <<"f">>),
+    ParseOutputReversed = [Fast, Normal],
+    persistent_term:put(
+        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
+        {?MODULE, is_fast_uplink_topic, []}
+    ),
+    try
+        ?assertEqual(
+            [{incoming, Fast}, {incoming, Normal}],
+            emqx_connection:next_incoming_msgs(ParseOutputReversed)
+        )
+    after
+        persistent_term:put(
+            ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
+            {?MODULE, is_default_quick_uplink_topic, []}
+        )
+    end.
 
 t_handle_msg_inet_reply(_) ->
     ?assertMatch(
@@ -708,3 +735,19 @@ channel(InitFields) ->
 handle_msg(Msg, St) -> emqx_connection:handle_msg(Msg, St).
 
 handle_call(Pid, Call, St) -> emqx_connection:handle_call(Pid, Call, St).
+
+is_default_quick_uplink_topic(Topic) when is_binary(Topic) ->
+    case re:run(Topic, <<"(?:/quick/datas|/quickdatas|/quickevents)$">>, [{capture, none}]) of
+        match -> true;
+        nomatch -> false
+    end;
+is_default_quick_uplink_topic(_) ->
+    false.
+
+is_fast_uplink_topic(Topic) when is_binary(Topic) ->
+    case re:run(Topic, <<"/fast$">>, [{capture, none}]) of
+        match -> true;
+        nomatch -> false
+    end;
+is_fast_uplink_topic(_) ->
+    false.
