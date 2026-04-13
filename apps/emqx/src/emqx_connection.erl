@@ -739,13 +739,41 @@ on_bytes_in(Oct, Data, State) ->
     {Packets, NState} = parse_incoming(Data, State),
     {ok, next_incoming_msgs(Packets), NState}.
 
-%% @doc: return a reversed Msg list
+%% @doc Return incoming messages in processing order.
+%% Parser output list is reversed, so we restore network order first.
+%% Quick uplink PUBLISH packets are moved ahead to reduce end-to-end latency.
 -compile({inline, [next_incoming_msgs/1]}).
 next_incoming_msgs([Packet]) ->
     {incoming, Packet};
 next_incoming_msgs(Packets) ->
-    Fun = fun(Packet, Acc) -> [{incoming, Packet} | Acc] end,
-    lists:foldl(Fun, [], Packets).
+    OrderedPackets = lists:reverse(Packets),
+    PrioritizedPackets = prioritize_quick_uplink_publish_packets(OrderedPackets),
+    [{incoming, Packet} || Packet <- PrioritizedPackets].
+
+prioritize_quick_uplink_publish_packets(Packets) ->
+    {QuickPackets, NormalPackets} = lists:partition(
+        fun is_quick_uplink_publish_packet/1,
+        Packets
+    ),
+    QuickPackets ++ NormalPackets.
+
+is_quick_uplink_publish_packet(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = Topic}}) ->
+    is_quick_uplink_topic(Topic);
+is_quick_uplink_publish_packet(_) ->
+    false.
+
+is_quick_uplink_topic(Topic) when is_binary(Topic) ->
+    has_binary_suffix(Topic, <<"/quick/datas">>) orelse
+        has_binary_suffix(Topic, <<"/quickdatas">>) orelse
+        has_binary_suffix(Topic, <<"/quickevents">>);
+is_quick_uplink_topic(_) ->
+    false.
+
+has_binary_suffix(Topic, Suffix) ->
+    TopicSize = byte_size(Topic),
+    SuffixSize = byte_size(Suffix),
+    TopicSize >= SuffixSize andalso
+        binary:part(Topic, TopicSize - SuffixSize, SuffixSize) =:= Suffix.
 
 parse_incoming(Data, State = #state{parser = Parser}) ->
     try
