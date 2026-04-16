@@ -14,6 +14,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(Q, emqx_mqueue).
+-define(PT_QUICK_DOWNLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_downlink_topic_match_mfa}).
 
 all() -> emqx_common_test_helpers:all(?MODULE).
 
@@ -118,6 +119,27 @@ t_priority_mqueue(_) ->
     ?assertEqual(5, ?Q:len(Q6)),
     {{value, _Msg}, Q7} = ?Q:out(Q6),
     ?assertEqual(4, ?Q:len(Q7)).
+
+t_dynamic_quick_downlink_priority_mqueue(_) ->
+    restore_pt(
+        ?PT_QUICK_DOWNLINK_TOPIC_MATCH_MFA,
+        fun() ->
+            persistent_term:put(
+                ?PT_QUICK_DOWNLINK_TOPIC_MATCH_MFA,
+                {?MODULE, is_quick_downlink_topic, []}
+            ),
+            Q0 = ?Q:init(#{max_len => 10, store_qos0 => false}),
+            {_, Q1} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/command">>}, Q0),
+            {_, Q2} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/quickcommand">>}, Q1),
+            {_, Q3} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/command">>}, Q2),
+            {{value, M1}, Q4} = ?Q:out(Q3),
+            {{value, M2}, Q5} = ?Q:out(Q4),
+            {{value, M3}, _Q6} = ?Q:out(Q5),
+            ?assertEqual(<<"/v1/devices/gw-1/quickcommand">>, M1#message.topic),
+            ?assertEqual(<<"/v1/devices/gw-1/command">>, M2#message.topic),
+            ?assertEqual(<<"/v1/devices/gw-1/command">>, M3#message.topic)
+        end
+    ).
 
 t_priority_mqueue_conservation(_) ->
     true = proper:quickcheck(conservation_prop()).
@@ -503,3 +525,24 @@ mqueue_prio(#message{extra = #{mqueue_priority := Prio}}) -> Prio.
 
 with_empty_extra(Msgs) ->
     [M#message{extra = #{}} || M <- Msgs].
+
+is_quick_downlink_topic(Topic) when is_binary(Topic) ->
+    case binary:match(Topic, <<"/quickcommand">>) of
+        nomatch -> false;
+        _ -> true
+    end;
+is_quick_downlink_topic(_) ->
+    false.
+
+restore_pt(Key, Fun) ->
+    OldValue = persistent_term:get(Key, undefined),
+    try
+        Fun()
+    after
+        case OldValue of
+            undefined ->
+                persistent_term:erase(Key);
+            _ ->
+                persistent_term:put(Key, OldValue)
+        end
+    end.
