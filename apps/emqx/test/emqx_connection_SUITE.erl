@@ -11,8 +11,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
 
--define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
-
 all() -> emqx_common_test_helpers:all(?MODULE).
 
 %%--------------------------------------------------------------------
@@ -48,11 +46,10 @@ init_per_suite(Config) ->
     ok = meck:expect(emqx_alarm, deactivate, fun(_) -> ok end),
     ok = meck:expect(emqx_alarm, deactivate, fun(_, _) -> ok end),
 
+    ok = meck:new(emqx_whc_hacker, [non_strict, no_history, no_link]),
+    ok = meck:expect(emqx_whc_hacker, is_quick_uplink_topic, fun is_default_quick_uplink_topic/1),
+
     Apps = emqx_cth_suite:start([emqx], #{work_dir => emqx_cth_suite:work_dir(Config)}),
-    persistent_term:put(
-        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
-        {?MODULE, is_default_quick_uplink_topic, []}
-    ),
     [{apps, Apps} | Config].
 
 end_per_suite(Config) ->
@@ -63,7 +60,7 @@ end_per_suite(Config) ->
     ok = meck:unload(emqx_metrics),
     ok = meck:unload(emqx_hooks),
     ok = meck:unload(emqx_alarm),
-    persistent_term:erase(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA),
+    ok = meck:unload(emqx_whc_hacker),
 
     emqx_cth_suite:stop(proplists:get_value(apps, Config)).
 
@@ -307,19 +304,15 @@ t_next_incoming_msgs_use_mfa_callback(_) ->
     Normal = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/datas">>, 1, <<"n">>),
     Fast = ?PUBLISH_PACKET(?QOS_1, <<"/v1/devices/gw-1/fast">>, 2, <<"f">>),
     ParseOutputReversed = [Fast, Normal],
-    persistent_term:put(
-        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
-        {?MODULE, is_fast_uplink_topic, []}
-    ),
+    ok = meck:expect(emqx_whc_hacker, is_quick_uplink_topic, fun is_fast_uplink_topic/1),
     try
         ?assertEqual(
             [{incoming, Fast}, {incoming, Normal}],
             emqx_connection:next_incoming_msgs(ParseOutputReversed)
         )
     after
-        persistent_term:put(
-            ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
-            {?MODULE, is_default_quick_uplink_topic, []}
+        ok = meck:expect(
+            emqx_whc_hacker, is_quick_uplink_topic, fun is_default_quick_uplink_topic/1
         )
     end.
 

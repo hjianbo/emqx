@@ -124,8 +124,6 @@
 -opaque state() :: #state{}.
 
 -define(ACTIVE_N, 10).
--define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
-
 -define(INFO_KEYS, [
     socktype,
     peername,
@@ -768,23 +766,22 @@ is_quick_uplink_publish_packet(_) ->
     false.
 
 is_quick_uplink_topic(Topic) when is_binary(Topic) ->
-    do_is_quick_uplink_topic(
-        Topic, persistent_term:get(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, undefined)
-    );
+    do_is_quick_uplink_topic(Topic);
 is_quick_uplink_topic(_) ->
     false.
 
-do_is_quick_uplink_topic(Topic, {Module, Function, Args}) when
-    is_atom(Module), is_atom(Function), is_list(Args)
-->
-    try erlang:apply(Module, Function, [Topic | Args]) of
-        true -> true;
-        _ -> false
-    catch
-        _:_ -> false
-    end;
-do_is_quick_uplink_topic(_Topic, _) ->
-    false.
+do_is_quick_uplink_topic(Topic) ->
+    case erlang:function_exported(emqx_whc_hacker, is_quick_uplink_topic, 1) of
+        true ->
+            try emqx_whc_hacker:is_quick_uplink_topic(Topic) of
+                true -> true;
+                _ -> false
+            catch
+                _:_ -> false
+            end;
+        false ->
+            false
+    end.
 
 parse_incoming(Data, State = #state{parser = Parser}) ->
     try
