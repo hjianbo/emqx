@@ -13,7 +13,6 @@
 -compile(nowarn_export_all).
 
 -define(ws_conn, emqx_ws_connection).
--define(PT_QUICK_UPLINK_TOPIC_MATCH_MFA, {emqx_whc_hacker, quick_uplink_topic_match_mfa}).
 
 all() -> emqx_common_test_helpers:all(?MODULE).
 
@@ -343,11 +342,8 @@ t_websocket_incoming(_) ->
     ?assertEqual(<<"invalid_property_code">>, CauseReq).
 
 t_handle_incoming_prioritize_quick_publish_by_mfa(_) ->
-    PrevMFA = persistent_term:get(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, undefined),
-    persistent_term:put(
-        ?PT_QUICK_UPLINK_TOPIC_MATCH_MFA,
-        {?MODULE, is_fast_uplink_topic, []}
-    ),
+    ok = meck:new(emqx_whc_hacker, [non_strict, no_history, no_link]),
+    ok = meck:expect(emqx_whc_hacker, is_quick_uplink_topic, fun is_fast_uplink_topic/1),
     ok = meck:new(emqx_channel, [passthrough, no_history, no_link]),
     ok = meck:expect(emqx_channel, handle_in, fun(Packet, Channel) ->
         Handled0 =
@@ -367,12 +363,7 @@ t_handle_incoming_prioritize_quick_publish_by_mfa(_) ->
     after
         erlang:erase(handled_packets),
         meck:unload(emqx_channel),
-        case PrevMFA of
-            undefined ->
-                persistent_term:erase(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA);
-            MFA ->
-                persistent_term:put(?PT_QUICK_UPLINK_TOPIC_MATCH_MFA, MFA)
-        end
+        meck:unload(emqx_whc_hacker)
     end.
 
 t_websocket_info_check_gc(_) ->

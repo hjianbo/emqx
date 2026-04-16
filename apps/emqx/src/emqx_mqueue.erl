@@ -61,7 +61,6 @@
 ]).
 
 -define(NO_PRIORITY_TABLE, disabled).
-
 -export_type([mqueue/0, options/0]).
 
 -type priority() :: infinity | integer().
@@ -330,8 +329,31 @@ get_priority_opt(Opts) ->
 %% disregard default priority from config, always use lowest (?LOWEST_PRIORITY=0)
 %% because the lowest priority in emqx_pqueue is a fallback to queue:queue()
 %% while the highest 'infinity' is a [{infinity, queue:queue()}]
-get_priority(_Topic, ?NO_PRIORITY_TABLE, _) -> ?LOWEST_PRIORITY;
-get_priority(Topic, PTab, Dp) -> maps:get(Topic, PTab, Dp).
+get_priority(Topic, ?NO_PRIORITY_TABLE, _) ->
+    case is_quick_downlink_topic(Topic) of
+        true -> ?HIGHEST_PRIORITY;
+        false -> ?LOWEST_PRIORITY
+    end;
+get_priority(Topic, PTab, Dp) ->
+    maps:get(Topic, PTab, Dp).
+
+is_quick_downlink_topic(Topic) when is_binary(Topic) ->
+    do_is_quick_downlink_topic(Topic);
+is_quick_downlink_topic(_) ->
+    false.
+
+do_is_quick_downlink_topic(Topic) ->
+    case erlang:function_exported(emqx_whc_hacker, is_quick_downlink_topic, 1) of
+        true ->
+            try emqx_whc_hacker:is_quick_downlink_topic(Topic) of
+                true -> true;
+                _ -> false
+            catch
+                _:_ -> false
+            end;
+        false ->
+            false
+    end.
 
 get_credits(?HIGHEST_PRIORITY, Opts) ->
     Infinity = 1000000,

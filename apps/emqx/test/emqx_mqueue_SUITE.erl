@@ -119,6 +119,24 @@ t_priority_mqueue(_) ->
     {{value, _Msg}, Q7} = ?Q:out(Q6),
     ?assertEqual(4, ?Q:len(Q7)).
 
+t_dynamic_quick_downlink_priority_mqueue(_) ->
+    ok = meck:new(emqx_whc_hacker, [non_strict, no_history, no_link]),
+    ok = meck:expect(emqx_whc_hacker, is_quick_downlink_topic, fun is_quick_downlink_topic/1),
+    try
+        Q0 = ?Q:init(#{max_len => 10, store_qos0 => false}),
+        {_, Q1} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/command">>}, Q0),
+        {_, Q2} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/quickcommand">>}, Q1),
+        {_, Q3} = ?Q:in(#message{qos = 1, topic = <<"/v1/devices/gw-1/command">>}, Q2),
+        {{value, M1}, Q4} = ?Q:out(Q3),
+        {{value, M2}, Q5} = ?Q:out(Q4),
+        {{value, M3}, _Q6} = ?Q:out(Q5),
+        ?assertEqual(<<"/v1/devices/gw-1/quickcommand">>, M1#message.topic),
+        ?assertEqual(<<"/v1/devices/gw-1/command">>, M2#message.topic),
+        ?assertEqual(<<"/v1/devices/gw-1/command">>, M3#message.topic)
+    after
+        meck:unload(emqx_whc_hacker)
+    end.
+
 t_priority_mqueue_conservation(_) ->
     true = proper:quickcheck(conservation_prop()).
 
@@ -503,3 +521,11 @@ mqueue_prio(#message{extra = #{mqueue_priority := Prio}}) -> Prio.
 
 with_empty_extra(Msgs) ->
     [M#message{extra = #{}} || M <- Msgs].
+
+is_quick_downlink_topic(Topic) when is_binary(Topic) ->
+    case binary:match(Topic, <<"/quickcommand">>) of
+        nomatch -> false;
+        _ -> true
+    end;
+is_quick_downlink_topic(_) ->
+    false.
