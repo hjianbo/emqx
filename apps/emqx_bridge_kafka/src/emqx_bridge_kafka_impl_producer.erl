@@ -516,11 +516,12 @@ render_message(
     Message
 ) ->
     ExtHeaders = proc_ext_headers(KafkaExtHeadersTokens, Message),
-    KafkaHeaders =
+    KafkaHeaders0 =
         case KafkaHeadersTokens of
             undefined -> ExtHeaders;
             HeadersTks -> merge_kafka_headers(HeadersTks, ExtHeaders, Message)
         end,
+    KafkaHeaders = maybe_inject_traceparent_header(KafkaHeaders0, Message),
     Headers = formalize_kafka_headers(KafkaHeaders, KafkaHeadersValEncodeMode),
     #{
         key => render(KeyTemplate, Message),
@@ -622,6 +623,51 @@ extract_traceparent_from_kafka_message(#{headers := Headers}) ->
     find_traceparent_header(Headers);
 extract_traceparent_from_kafka_message(_) ->
     undefined.
+
+maybe_inject_traceparent_header(Headers, Message) ->
+    case has_traceparent_header(Headers) of
+        true ->
+            Headers;
+        false ->
+            case extract_traceparent_from_message(Message) of
+                undefined ->
+                    Headers;
+                TraceParent ->
+                    [{<<"traceparent">>, TraceParent} | Headers]
+            end
+    end.
+
+has_traceparent_header([{Key, _Value} | Rest]) ->
+    case is_traceparent_key(Key) of
+        true -> true;
+        false -> has_traceparent_header(Rest)
+    end;
+has_traceparent_header([]) ->
+    false.
+
+extract_traceparent_from_message(Message) when is_map(Message) ->
+    maps:get(
+        traceparent,
+        Message,
+        maps:get(
+            <<"traceparent">>,
+            Message,
+            extract_traceparent_from_pub_props(Message)
+        )
+    );
+extract_traceparent_from_message(_) ->
+    undefined.
+
+extract_traceparent_from_pub_props(Message) ->
+    PubProps = maps:get(pub_props, Message, maps:get(<<"pub_props">>, Message, #{})),
+    case PubProps of
+        #{'User-Property' := UserProps} ->
+            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
+        #{<<"User-Property">> := UserProps} ->
+            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
+        _ ->
+            undefined
+    end.
 
 find_traceparent_header([{Key, Value} | Rest]) ->
     case is_traceparent_key(Key) of
