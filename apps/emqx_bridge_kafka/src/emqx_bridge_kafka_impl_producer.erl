@@ -43,6 +43,7 @@
 -define(kafka_client_id, kafka_client_id).
 -define(kafka_producers, kafka_producers).
 -define(PROBE_TOPIC_NAME, <<"emqx-connector-connectivity-probe">>).
+-define(HEALTH_CHECK_PARTITIONS_LIMIT, 10).
 
 resource_type() -> kafka_producer.
 
@@ -626,7 +627,10 @@ on_get_channel_status(
         partitions_limit := MaxPartitions
     } = maps:get(ActionResId, Channels),
     try
-        ok = assert_topic_and_leader_connections(ActionResId, ClientId, MKafkaTopic, MaxPartitions),
+        HealthCheckPartitionsLimit = health_check_partitions_limit(MaxPartitions),
+        ok = assert_topic_and_leader_connections(
+            ActionResId, ClientId, MKafkaTopic, HealthCheckPartitionsLimit
+        ),
         ?tp("kafka_producer_action_connected", #{}),
         ?status_connected
     catch
@@ -732,6 +736,17 @@ check_if_healthy_leaders(ActionResId, ClientId, ClientPid, KafkaTopic, MaxPartit
                 kafka_topic => KafkaTopic
             })
     end.
+
+%% Avoid establishing one leader connection per partition during health checks
+%% for very large Kafka topics. The producer partition limit is unchanged.
+health_check_partitions_limit(all_partitions) ->
+    ?HEALTH_CHECK_PARTITIONS_LIMIT;
+health_check_partitions_limit(MaxPartitions) when
+    is_integer(MaxPartitions), MaxPartitions > ?HEALTH_CHECK_PARTITIONS_LIMIT
+->
+    ?HEALTH_CHECK_PARTITIONS_LIMIT;
+health_check_partitions_limit(MaxPartitions) ->
+    MaxPartitions.
 
 check_topic_status(ClientId, WolffClientPid, KafkaTopic) ->
     case wolff_client:check_topic_exists_with_client_pid(WolffClientPid, KafkaTopic) of

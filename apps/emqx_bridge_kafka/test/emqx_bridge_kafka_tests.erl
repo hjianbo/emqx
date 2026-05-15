@@ -5,6 +5,7 @@
 -module(emqx_bridge_kafka_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("emqx_resource/include/emqx_resource.hrl").
 
 -export([atoms/0, kafka_producer_old_hocon/1]).
 
@@ -189,6 +190,190 @@ tcp_keepalive_validation_test_() ->
     ConsumerConf = parse(kafka_consumer_hocon()),
     test_keepalive_validation([<<"kafka">>, <<"myproducer">>], ProducerConf) ++
         test_keepalive_validation([<<"kafka_consumer">>, <<"my_consumer">>], ConsumerConf).
+
+kafka_producer_channel_health_check_samples_leaders_test() ->
+    assert_kafka_producer_channel_health_check_limit(
+        <<"action:kafka_producer:test">>, all_partitions, 10
+    ).
+
+kafka_producer_channel_health_check_keeps_small_limit_test() ->
+    assert_kafka_producer_channel_health_check_limit(
+        <<"action:kafka_producer:test">>, 3, 3
+    ).
+
+kafka_producer_dryrun_health_check_samples_leaders_test() ->
+    assert_kafka_producer_channel_health_check_limit(
+        <<"action:kafka_producer:PROBE_abcdefgh:test">>, all_partitions, 10
+    ).
+
+kafka_producer_add_channel_keeps_configured_limit_test() ->
+    assert_kafka_producer_add_channel_limit(all_partitions, all_partitions).
+
+assert_kafka_producer_channel_health_check_limit(ActionResId, ConfiguredLimit, ExpectedLimit) ->
+    Parent = self(),
+    ClientPid = self(),
+    ClientId = <<"kafka-client">>,
+    ConnResId = <<"connector:kafka_producer:test">>,
+    KafkaTopic = <<"large-topic">>,
+    ok = meck:new(wolff_client_sup, [passthrough, no_link]),
+    ok = meck:new(wolff_client, [passthrough, no_link]),
+    try
+        ok = meck:expect(wolff_client_sup, find_client, fun(FoundClientId) ->
+            ?assertEqual(ClientId, FoundClientId),
+            {ok, ClientPid}
+        end),
+        ok = meck:expect(wolff_client, check_topic_exists_with_client_pid, fun(
+            FoundClientPid, FoundKafkaTopic
+        ) ->
+            ?assertEqual(ClientPid, FoundClientPid),
+            ?assertEqual(KafkaTopic, FoundKafkaTopic),
+            ok
+        end),
+        ok = meck:expect(wolff_client, get_leader_connections, fun(
+            FoundClientPid, FoundActionResId, FoundKafkaTopic, MaxPartitions
+        ) ->
+            ?assertEqual(ClientPid, FoundClientPid),
+            ?assertEqual(ActionResId, FoundActionResId),
+            ?assertEqual(KafkaTopic, FoundKafkaTopic),
+            Parent ! {leader_connection_limit, MaxPartitions},
+            {ok, [{0, self()}]}
+        end),
+        State = #{
+            client_id => ClientId,
+            installed_bridge_v2s => #{
+                ActionResId => #{
+                    topic => KafkaTopic,
+                    partitions_limit => ConfiguredLimit
+                }
+            }
+        },
+        ?assertEqual(
+            ?status_connected,
+            emqx_bridge_kafka_impl_producer:on_get_channel_status(ConnResId, ActionResId, State)
+        ),
+        receive
+            {leader_connection_limit, ExpectedLimit} ->
+                ok;
+            {leader_connection_limit, Other} ->
+                error({unexpected_leader_connection_limit, Other})
+        after 1000 ->
+            error(leader_connection_limit_not_called)
+        end
+    after
+        catch meck:unload(wolff_client),
+        catch meck:unload(wolff_client_sup)
+    end.
+
+assert_kafka_producer_add_channel_limit(ConfiguredLimit, ExpectedLimit) ->
+    Parent = self(),
+    ClientPid = self(),
+    ClientId = <<"kafka-client">>,
+    ConnResId = <<"connector:kafka_producer:test">>,
+    ActionResId = <<"action:kafka_producer:test:connector:kafka_producer:test">>,
+    KafkaTopic = <<"large-topic">>,
+    ok = meck:new(wolff_client_sup, [passthrough, no_link]),
+    ok = meck:new(wolff_client, [passthrough, no_link]),
+    ok = meck:new(wolff, [passthrough, no_link]),
+    ok = meck:new(emqx_resource, [passthrough, no_link]),
+    ok = meck:new(emqx_bridge_v2, [non_strict, no_link]),
+    ok = meck:new(telemetry, [passthrough, no_link]),
+    try
+        ok = meck:expect(emqx_bridge_v2, parse_id, fun(FoundActionResId) ->
+            ?assertEqual(ActionResId, FoundActionResId),
+            #{kind => action, type => <<"kafka_producer">>, name => <<"test">>}
+        end),
+        ok = meck:expect(telemetry, attach_many, fun(_HandlerId, _Events, _Function, _Config) ->
+            ok
+        end),
+        ok = meck:expect(wolff_client_sup, find_client, fun(FoundClientId) ->
+            ?assertEqual(ClientId, FoundClientId),
+            {ok, ClientPid}
+        end),
+        ok = meck:expect(wolff_client, check_topic_exists_with_client_pid, fun(
+            FoundClientPid, FoundKafkaTopic
+        ) ->
+            ?assertEqual(ClientPid, FoundClientPid),
+            ?assertEqual(KafkaTopic, FoundKafkaTopic),
+            ok
+        end),
+        ok = meck:expect(wolff_client, get_leader_connections, fun(
+            FoundClientPid, FoundActionResId, FoundKafkaTopic, MaxPartitions
+        ) ->
+            ?assertEqual(ClientPid, FoundClientPid),
+            ?assertEqual(ActionResId, FoundActionResId),
+            ?assertEqual(KafkaTopic, FoundKafkaTopic),
+            Parent ! {add_channel_leader_connection_limit, MaxPartitions},
+            {ok, [{0, self()}]}
+        end),
+        ok = meck:expect(wolff, ensure_supervised_dynamic_producers, fun(
+            FoundClientId, ProducerConfig
+        ) ->
+            ?assertEqual(ClientId, FoundClientId),
+            ?assertEqual(ConfiguredLimit, maps:get(max_partitions, ProducerConfig)),
+            {ok, #{group => ActionResId}}
+        end),
+        ok = meck:expect(wolff, add_topic, fun(FoundProducers, FoundKafkaTopic) ->
+            ?assertEqual(#{group => ActionResId}, FoundProducers),
+            ?assertEqual(KafkaTopic, FoundKafkaTopic),
+            ok
+        end),
+        ok = meck:expect(emqx_resource, allocate_resource, fun(
+            FoundConnResId, _Key, _Resource
+        ) ->
+            ?assertEqual(ConnResId, FoundConnResId),
+            ok
+        end),
+        OldState = #{
+            client_id => ClientId,
+            installed_bridge_v2s => #{}
+        },
+        {ok, _NewState} = emqx_bridge_kafka_impl_producer:on_add_channel(
+            ConnResId,
+            OldState,
+            ActionResId,
+            kafka_producer_action_config(KafkaTopic, ConfiguredLimit)
+        ),
+        receive
+            {add_channel_leader_connection_limit, ExpectedLimit} ->
+                ok;
+            {add_channel_leader_connection_limit, Other} ->
+                error({unexpected_add_channel_leader_connection_limit, Other})
+        after 1000 ->
+            error(add_channel_leader_connection_limit_not_called)
+        end
+    after
+        catch meck:unload(telemetry),
+        catch meck:unload(emqx_bridge_v2),
+        catch meck:unload(emqx_resource),
+        catch meck:unload(wolff),
+        catch meck:unload(wolff_client),
+        catch meck:unload(wolff_client_sup)
+    end.
+
+kafka_producer_action_config(KafkaTopic, PartitionsLimit) ->
+    #{
+        bridge_type => kafka_producer,
+        parameters => #{
+            message => #{key => <<"${clientid}">>, value => <<"${payload}">>},
+            topic => KafkaTopic,
+            sync_query_timeout => 5000,
+            max_linger_time => 0,
+            max_linger_bytes => 0,
+            max_batch_bytes => 896,
+            compression => no_compression,
+            partition_strategy => random,
+            required_acks => all_isr,
+            partition_count_refresh_interval => 60,
+            max_inflight => 10,
+            partitions_limit => PartitionsLimit,
+            buffer => #{
+                mode => memory,
+                per_partition_limit => 1024,
+                segment_bytes => 1024,
+                memory_overload_protection => false
+            }
+        }
+    }.
 
 test_keepalive_validation(Name, Conf) ->
     Path = [<<"bridges">>] ++ Name ++ [<<"socket_opts">>, <<"tcp_keepalive">>],
