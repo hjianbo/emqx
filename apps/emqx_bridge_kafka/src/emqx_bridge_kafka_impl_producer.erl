@@ -28,7 +28,7 @@
 ]).
 
 -export([
-    on_kafka_ack/5,
+    on_kafka_ack/4,
     handle_telemetry_event/4
 ]).
 
@@ -43,7 +43,6 @@
 -define(kafka_client_id, kafka_client_id).
 -define(kafka_producers, kafka_producers).
 -define(PROBE_TOPIC_NAME, <<"emqx-connector-connectivity-probe">>).
--define(WHC_KAFKA_ACK_EVENT, [emqx_whc, kafka_producer_ack]).
 
 resource_type() -> kafka_producer.
 
@@ -516,12 +515,11 @@ render_message(
     Message
 ) ->
     ExtHeaders = proc_ext_headers(KafkaExtHeadersTokens, Message),
-    KafkaHeaders0 =
+    KafkaHeaders =
         case KafkaHeadersTokens of
             undefined -> ExtHeaders;
             HeadersTks -> merge_kafka_headers(HeadersTks, ExtHeaders, Message)
         end,
-    KafkaHeaders = maybe_inject_traceparent_header(KafkaHeaders0, Message),
     Headers = formalize_kafka_headers(KafkaHeaders, KafkaHeadersValEncodeMode),
     #{
         key => render(KeyTemplate, Message),
@@ -553,14 +551,11 @@ do_send_msg(sync, KafkaTopic, KafkaMessage, Producers, SyncTimeout) ->
         {_Partition, _Offset} = wolff:send_sync2(
             Producers, KafkaTopic, [KafkaMessage], SyncTimeout
         ),
-        emit_whc_kafka_ack_event(ok, KafkaTopic, KafkaMessage),
         ok
     catch
         error:{producer_down, _} = Reason ->
-            emit_whc_kafka_ack_event(Reason, KafkaTopic, KafkaMessage),
             {error, Reason};
         error:timeout ->
-            emit_whc_kafka_ack_event(timeout, KafkaTopic, KafkaMessage),
             {error, timeout}
     end;
 do_send_msg(async, KafkaTopic, KafkaMessage, Producers, AsyncReplyFn) ->
@@ -569,10 +564,7 @@ do_send_msg(async, KafkaTopic, KafkaMessage, Producers, AsyncReplyFn) ->
     %%   for counters and gauges.
     Batch = [KafkaMessage],
     {_Partition, Pid} = wolff:send2(
-        Producers,
-        KafkaTopic,
-        Batch,
-        {fun ?MODULE:on_kafka_ack/5, [AsyncReplyFn, KafkaTopic, KafkaMessage]}
+        Producers, KafkaTopic, Batch, {fun ?MODULE:on_kafka_ack/4, [AsyncReplyFn, KafkaTopic]}
     ),
     %% This Pid is returned, but not monitored by caller
     %% See emqx_resource_buffer_worker:simple_async_internal_buffer
@@ -580,139 +572,23 @@ do_send_msg(async, KafkaTopic, KafkaMessage, Producers, AsyncReplyFn) ->
 
 %% Wolff producer never gives up retrying
 %% so there can only be 'ok' results.
-on_kafka_ack(_Partition, Offset, ReplyFnAndArgs0, KafkaTopic, KafkaMessage)
-    when is_integer(Offset) ->
-    emit_whc_kafka_ack_event(ok, KafkaTopic, KafkaMessage),
+on_kafka_ack(_Partition, Offset, ReplyFnAndArgs0, KafkaTopic) when is_integer(Offset) ->
     ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% `emqx_rule_runtime:inc_action_metrics/2' is embedded inside reply function
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, ok);
-on_kafka_ack(_Partition, buffer_overflow_discarded, ReplyFnAndArgs0, KafkaTopic, KafkaMessage) ->
-    emit_whc_kafka_ack_event(buffer_overflow, KafkaTopic, KafkaMessage),
+on_kafka_ack(_Partition, buffer_overflow_discarded, ReplyFnAndArgs0, KafkaTopic) ->
     ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% wolff should bump the dropped_queue_full counter in handle_telemetry_event/4
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, buffer_overflow});
-on_kafka_ack(_Partition, message_too_large, ReplyFnAndArgs0, KafkaTopic, KafkaMessage) ->
-    emit_whc_kafka_ack_event(message_too_large, KafkaTopic, KafkaMessage),
+on_kafka_ack(_Partition, message_too_large, ReplyFnAndArgs0, KafkaTopic) ->
     ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     %% wolff should bump the message 'dropped' counter with handle_telemetry_event/4.
     %% however 'dropped' is not mapped to EMQX metrics name
     %% so we reply error here
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, message_too_large});
-on_kafka_ack(_Partition, partition_lost, ReplyFnAndArgs0, KafkaTopic, KafkaMessage) ->
-    emit_whc_kafka_ack_event(partition_lost, KafkaTopic, KafkaMessage),
+on_kafka_ack(_Partition, partition_lost, ReplyFnAndArgs0, KafkaTopic) ->
     ReplyFnAndArgs = hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs0, KafkaTopic),
     emqx_resource:apply_reply_fun(ReplyFnAndArgs, {error, partition_lost}).
-
-emit_whc_kafka_ack_event(Result, KafkaTopic, KafkaMessage) ->
-    case extract_traceparent_from_kafka_message(KafkaMessage) of
-        undefined ->
-            ok;
-        TraceParent ->
-            telemetry:execute(
-                ?WHC_KAFKA_ACK_EVENT,
-                #{},
-                #{
-                    result => normalize_whc_kafka_ack_result(Result),
-                    kafka_topic => KafkaTopic,
-                    traceparent => TraceParent
-                }
-            )
-    end.
-
-extract_traceparent_from_kafka_message(#{headers := Headers}) ->
-    find_traceparent_header(Headers);
-extract_traceparent_from_kafka_message(_) ->
-    undefined.
-
-maybe_inject_traceparent_header(Headers, Message) ->
-    case has_traceparent_header(Headers) of
-        true ->
-            Headers;
-        false ->
-            case extract_traceparent_from_message(Message) of
-                undefined ->
-                    Headers;
-                TraceParent ->
-                    [{<<"traceparent">>, TraceParent} | Headers]
-            end
-    end.
-
-has_traceparent_header([{Key, _Value} | Rest]) ->
-    case is_traceparent_key(Key) of
-        true -> true;
-        false -> has_traceparent_header(Rest)
-    end;
-has_traceparent_header([]) ->
-    false.
-
-extract_traceparent_from_message(Message) when is_map(Message) ->
-    maps:get(
-        traceparent,
-        Message,
-        maps:get(
-            <<"traceparent">>,
-            Message,
-            extract_traceparent_from_pub_props(Message)
-        )
-    );
-extract_traceparent_from_message(_) ->
-    undefined.
-
-extract_traceparent_from_pub_props(Message) ->
-    PubProps = maps:get(pub_props, Message, maps:get(<<"pub_props">>, Message, #{})),
-    case PubProps of
-        #{'User-Property' := UserProps} ->
-            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
-        #{<<"User-Property">> := UserProps} ->
-            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
-        _ ->
-            undefined
-    end.
-
-find_traceparent_header([{Key, Value} | Rest]) ->
-    case is_traceparent_key(Key) of
-        true ->
-            normalize_traceparent_value(Value);
-        false ->
-            find_traceparent_header(Rest)
-    end;
-find_traceparent_header([]) ->
-    undefined;
-find_traceparent_header(_) ->
-    undefined.
-
-is_traceparent_key(Key) when is_binary(Key) ->
-    to_lower_bin(Key) =:= <<"traceparent">>;
-is_traceparent_key(Key) when is_list(Key) ->
-    is_traceparent_key(iolist_to_binary(Key));
-is_traceparent_key(Key) when is_atom(Key) ->
-    is_traceparent_key(atom_to_binary(Key, utf8));
-is_traceparent_key(_) ->
-    false.
-
-normalize_traceparent_value(Value) when is_binary(Value), byte_size(Value) > 0 ->
-    Value;
-normalize_traceparent_value(Value) when is_list(Value) ->
-    normalize_traceparent_value(iolist_to_binary(Value));
-normalize_traceparent_value(Value) when is_atom(Value) ->
-    normalize_traceparent_value(atom_to_binary(Value, utf8));
-normalize_traceparent_value(_) ->
-    undefined.
-
-normalize_whc_kafka_ack_result(ok) ->
-    ok;
-normalize_whc_kafka_ack_result({producer_down, Reason}) ->
-    {producer_down, Reason};
-normalize_whc_kafka_ack_result(Other) ->
-    Other.
-
-to_lower_bin(Bin) when is_binary(Bin) ->
-    <<<<(to_lower_char(C))>> || <<C>> <= Bin>>.
-
-to_lower_char(C) when C >= $A, C =< $Z ->
-    C + 32;
-to_lower_char(C) ->
-    C.
 
 hack_reply_fun_to_pass_kafka_topic(ReplyFnAndArgs, KafkaTopic) ->
     try

@@ -164,9 +164,7 @@ republish(
     Flags = Flags0#{retain => Retain},
     PubProps0 = render_pub_props(UserPropertiesTemplate, Selected, Env),
     MQTTProps = render_mqtt_properties(MQTTPropertiesTemplate, Selected, Env),
-    PubProps = maybe_attach_kafka_consumer_trace_props(
-        maps:merge(PubProps0, MQTTProps), Selected, Env
-    ),
+    PubProps = maps:merge(PubProps0, MQTTProps),
     TraceInfo = #{
         flags => Flags,
         topic => Topic,
@@ -317,99 +315,6 @@ render_pub_props(UserPropertiesTemplate, Selected, Env) ->
         end,
     #{'User-Property' => UserProperties}.
 
-maybe_attach_kafka_consumer_trace_props(PubProps, Selected, Env) ->
-    case extract_kafka_consumer_traceparent(Selected, Env) of
-        undefined ->
-            PubProps;
-        TraceParent ->
-            UserProperties0 = maps:get('User-Property', PubProps, #{}),
-            UserProperties = ensure_user_properties_map(UserProperties0),
-            PubProps#{
-                'User-Property' => UserProperties#{
-                    <<"traceparent">> => TraceParent,
-                    <<"whc_trace_source">> => <<"kafka_consumer">>
-                }
-            }
-    end.
-
-extract_kafka_consumer_traceparent(Selected, Env) ->
-    case is_kafka_consumer_trace_env(Env) of
-        true ->
-            maps:get(traceparent, Env, maps:get(<<"traceparent">>, Env, undefined));
-        false ->
-            extract_traceparent_from_selected(Selected)
-    end.
-
-is_kafka_consumer_trace_env(Env) when is_map(Env) ->
-    TraceSource = maps:get(whc_trace_source, Env, maps:get(<<"whc_trace_source">>, Env, undefined)),
-    TraceSource =:= kafka_consumer orelse TraceSource =:= <<"kafka_consumer">>;
-is_kafka_consumer_trace_env(_) ->
-    false.
-
-extract_traceparent_from_selected(Selected) when is_map(Selected) ->
-    Headers = maps:get(headers, Selected, maps:get(<<"headers">>, Selected, #{})),
-    find_traceparent_header(Headers);
-extract_traceparent_from_selected(_) ->
-    undefined.
-
-find_traceparent_header(Headers) when is_map(Headers) ->
-    maps:fold(
-        fun(Key, Value, Acc) ->
-            case Acc of
-                undefined ->
-                    case is_traceparent_key(Key) of
-                        true -> normalize_traceparent_value(Value);
-                        false -> undefined
-                    end;
-                _ ->
-                    Acc
-            end
-        end,
-        undefined,
-        Headers
-    );
-find_traceparent_header(Headers) when is_list(Headers) ->
-    lists:foldl(
-        fun
-            ({Key, Value}, undefined) ->
-                case is_traceparent_key(Key) of
-                    true -> normalize_traceparent_value(Value);
-                    false -> undefined
-                end;
-            (_Header, Acc) ->
-                Acc
-        end,
-        undefined,
-        Headers
-    );
-find_traceparent_header(_) ->
-    undefined.
-
-is_traceparent_key(Key) when is_binary(Key) ->
-    to_lower_bin(Key) =:= <<"traceparent">>;
-is_traceparent_key(Key) when is_list(Key) ->
-    is_traceparent_key(iolist_to_binary(Key));
-is_traceparent_key(Key) when is_atom(Key) ->
-    is_traceparent_key(atom_to_binary(Key, utf8));
-is_traceparent_key(_) ->
-    false.
-
-normalize_traceparent_value(Value) when is_binary(Value), byte_size(Value) > 0 ->
-    Value;
-normalize_traceparent_value(Value) when is_list(Value) ->
-    normalize_traceparent_value(iolist_to_binary(Value));
-normalize_traceparent_value(Value) when is_atom(Value) ->
-    normalize_traceparent_value(atom_to_binary(Value, utf8));
-normalize_traceparent_value(_) ->
-    undefined.
-
-ensure_user_properties_map(UserProperties) when is_map(UserProperties) ->
-    UserProperties;
-ensure_user_properties_map(UserProperties) when is_list(UserProperties) ->
-    maps:from_list([{K, V} || {K, V} <- UserProperties]);
-ensure_user_properties_map(_) ->
-    #{}.
-
 %%
 
 -define(BADPROP(K, REASON, ENV, DATA),
@@ -482,11 +387,3 @@ encode_mqtt_property('Message-Expiry-Interval', V) -> ensure_int(V);
 encode_mqtt_property('Subscription-Identifier', V) -> ensure_int(V);
 %% note: `emqx_placeholder:proc_tmpl/2' currently always return a binary.
 encode_mqtt_property(_Prop, V) when is_binary(V) -> V.
-
-to_lower_bin(Bin) when is_binary(Bin) ->
-    <<<<(to_lower_char(C))>> || <<C>> <= Bin>>.
-
-to_lower_char(C) when C >= $A, C =< $Z ->
-    C + 32;
-to_lower_char(C) ->
-    C.
