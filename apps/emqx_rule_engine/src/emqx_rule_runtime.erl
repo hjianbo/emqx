@@ -479,14 +479,13 @@ do_handle_action(RuleId, ActId, Selected, Envs) ->
 do_handle_action2(RuleId, {bridge, BridgeType, BridgeName, ResId} = Action, Selected, _Envs) ->
     trace_action_bridge("BRIDGE", Action, "bridge_action", #{}, debug),
     {TraceCtx, IncCtx} = do_handle_action_get_trace_inc_metrics_context(RuleId, Action),
-    Selected1 = maybe_attach_kafka_traceparent(BridgeType, Selected, _Envs),
     ReplyTo = {
         fun ?MODULE:eval_action_reply_to/2,
         [IncCtx],
         ?EXT_TRACE_WITH_ACTION_METADATA(_Envs, #{reply_dropped => true})
     },
     case
-        emqx_bridge:send_message(BridgeType, BridgeName, ResId, Selected1, #{
+        emqx_bridge:send_message(BridgeType, BridgeName, ResId, Selected, #{
             reply_to => ReplyTo, trace_ctx => TraceCtx
         })
     of
@@ -503,7 +502,6 @@ do_handle_action2(
 ) ->
     trace_action_bridge("BRIDGE", Action, "bridge_action", #{}, debug),
     {TraceCtx, IncCtx} = do_handle_action_get_trace_inc_metrics_context(RuleId, Action),
-    Selected1 = maybe_attach_kafka_traceparent(BridgeType, Selected, _Envs),
     ReplyTo = {
         fun ?MODULE:eval_action_reply_to/2,
         [IncCtx],
@@ -513,7 +511,7 @@ do_handle_action2(
         emqx_bridge_v2:send_message(
             BridgeType,
             BridgeName,
-            Selected1,
+            Selected,
             #{reply_to => ReplyTo, trace_ctx => TraceCtx}
         )
     of
@@ -545,50 +543,6 @@ do_handle_action2(RuleId, #{mod := Mod, func := Func} = Action, Selected, Envs) 
         IncCtx, ?EXT_TRACE_WITH_ACTION_METADATA(Envs, #{result => Result})
     ),
     Result.
-
-maybe_attach_kafka_traceparent(kafka, Selected, Envs) ->
-    maybe_attach_traceparent(Selected, Envs);
-maybe_attach_kafka_traceparent(kafka_producer, Selected, Envs) ->
-    maybe_attach_traceparent(Selected, Envs);
-maybe_attach_kafka_traceparent(_, Selected, _Envs) ->
-    Selected.
-
-maybe_attach_traceparent(Selected, Envs) when is_map(Selected) ->
-    case has_traceparent(Selected) of
-        true ->
-            Selected;
-        false ->
-            case extract_traceparent_from_envs(Envs) of
-                undefined ->
-                    Selected;
-                TraceParent ->
-                    Selected#{
-                        traceparent => TraceParent,
-                        <<"traceparent">> => TraceParent
-                    }
-            end
-    end;
-maybe_attach_traceparent(Selected, _Envs) ->
-    Selected.
-
-has_traceparent(Selected) ->
-    maps:is_key(traceparent, Selected) orelse maps:is_key(<<"traceparent">>, Selected).
-
-extract_traceparent_from_envs(Envs) when is_map(Envs) ->
-    maps:get(traceparent, Envs, maps:get(<<"traceparent">>, Envs, extract_traceparent_from_pub_props(Envs)));
-extract_traceparent_from_envs(_) ->
-    undefined.
-
-extract_traceparent_from_pub_props(Envs) ->
-    PubProps = maps:get(pub_props, Envs, maps:get(<<"pub_props">>, Envs, #{})),
-    case PubProps of
-        #{'User-Property' := UserProps} ->
-            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
-        #{<<"User-Property">> := UserProps} ->
-            maps:get(traceparent, UserProps, maps:get(<<"traceparent">>, UserProps, undefined));
-        _ ->
-            undefined
-    end.
 
 do_handle_action_get_trace_inc_metrics_context(RuleId, Action) ->
     case {emqx_trace:list(), logger:get_process_metadata()} of
