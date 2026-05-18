@@ -180,7 +180,13 @@ on_message_publish(Message = #message{topic = Topic}, _Conf) ->
     {ok, Message}.
 
 on_bridge_message_received(Message, Conf = #{event_topic := BridgeTopic}) ->
-    apply_event(BridgeTopic, fun() -> with_basic_columns(BridgeTopic, Message, #{}) end, Conf).
+    apply_event(
+        BridgeTopic,
+        fun() ->
+            with_basic_columns(BridgeTopic, Message, bridge_trace_env(BridgeTopic, Message))
+        end,
+        Conf
+    ).
 
 on_client_connected(ClientInfo, ConnInfo, Conf) ->
     apply_event(
@@ -842,6 +848,80 @@ with_basic_columns(EventName, Columns, Envs) when is_map(Columns) ->
         },
         Envs
     }.
+
+bridge_trace_env(<<"$bridges/kafka_consumer:", _/binary>>, #{headers := Headers}) ->
+    case find_traceparent_header(Headers) of
+        undefined ->
+            #{};
+        TraceParent ->
+            #{
+                traceparent => TraceParent,
+                <<"traceparent">> => TraceParent,
+                whc_trace_source => kafka_consumer,
+                <<"whc_trace_source">> => <<"kafka_consumer">>
+            }
+    end;
+bridge_trace_env(_BridgeTopic, _Message) ->
+    #{}.
+
+find_traceparent_header(Headers) when is_map(Headers) ->
+    maps:fold(
+        fun(Key, Value, Acc) ->
+            case Acc of
+                undefined ->
+                    case is_traceparent_key(Key) of
+                        true -> normalize_traceparent_value(Value);
+                        false -> undefined
+                    end;
+                _ ->
+                    Acc
+            end
+        end,
+        undefined,
+        Headers
+    );
+find_traceparent_header(Headers) when is_list(Headers) ->
+    lists:foldl(
+        fun
+            ({Key, Value}, undefined) ->
+                case is_traceparent_key(Key) of
+                    true -> normalize_traceparent_value(Value);
+                    false -> undefined
+                end;
+            (_Header, Acc) ->
+                Acc
+        end,
+        undefined,
+        Headers
+    );
+find_traceparent_header(_) ->
+    undefined.
+
+is_traceparent_key(Key) when is_binary(Key) ->
+    to_lower_bin(Key) =:= <<"traceparent">>;
+is_traceparent_key(Key) when is_list(Key) ->
+    is_traceparent_key(iolist_to_binary(Key));
+is_traceparent_key(Key) when is_atom(Key) ->
+    is_traceparent_key(atom_to_binary(Key, utf8));
+is_traceparent_key(_) ->
+    false.
+
+normalize_traceparent_value(Value) when is_binary(Value), byte_size(Value) > 0 ->
+    Value;
+normalize_traceparent_value(Value) when is_list(Value) ->
+    normalize_traceparent_value(iolist_to_binary(Value));
+normalize_traceparent_value(Value) when is_atom(Value) ->
+    normalize_traceparent_value(atom_to_binary(Value, utf8));
+normalize_traceparent_value(_) ->
+    undefined.
+
+to_lower_bin(Bin) when is_binary(Bin) ->
+    <<<<(to_lower_char(C))>> || <<C>> <= Bin>>.
+
+to_lower_char(C) when C >= $A, C =< $Z ->
+    C + 32;
+to_lower_char(C) ->
+    C.
 
 %%--------------------------------------------------------------------
 %% rules applying
